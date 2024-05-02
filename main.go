@@ -2,38 +2,20 @@ package main
 
 import (
 	"fmt"
-	"log"
 
-	"transformer/cmdr"
+	"transformer/commands"
 )
 
 func main() {
-	cmd := cmdr.NewCommand("ls", "-la")
-	gcmd := cmdr.NewCommand("grep", "main")
-	err := cmd.PipeTo(gcmd)
+	var foo commands.OSRelease
+	foo, err := foo.GetOSRelease()
 	if err != nil {
-		log.Fatalln(err)
+		fmt.Println(err)
+		return
 	}
-	err = cmd.Start()
+	fmt.Printf("%+v\n", foo)
+	_, err = commands.FindDiskArray()
 	if err != nil {
-		log.Printf("ls start error: %v\n", err)
+		panic(err)
 	}
-	err = gcmd.Start()
-	if err != nil {
-		log.Printf("grep start error: %v\n", err)
-	}
-	err = cmd.Wait()
-	if err != nil {
-		log.Printf("ls wait error: %v\n", err)
-	}
-	err = gcmd.Wait()
-	if err != nil {
-		log.Printf("grep wait error: %v\n", err)
-	}
-	fmt.Printf("ls exit code: %d\n", cmd.GetExitCode())
-	fmt.Printf("ls stdout: %s\n", cmd.GetStdoutAsString())
-	fmt.Printf("ls stderr: %s\n", cmd.GetStderrAsString())
-	fmt.Printf("grep exit code: %d\n", gcmd.GetExitCode())
-	fmt.Printf("grep stdout: %s\n", gcmd.GetStdoutAsString())
-	fmt.Printf("grep stderr: %s\n", gcmd.GetStderrAsString())
 }
