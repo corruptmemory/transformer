@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"transformer/dfutils"
+	"transformer/efigrubutils"
 
 	"transformer/util"
 )
 
 type PartitionContentDetails struct {
 	Device               string
+	EFIGrubFound         bool
+	EFIGrubPath          string
+	EFIGrubContents      string
+	EFIGrubTemplate      *efigrubutils.EFIGrubConfig
 	GrubCfgFound         bool
 	GrubCfgPath          string
 	GrubCfgContents      string
@@ -20,6 +26,7 @@ type PartitionContentDetails struct {
 	FstabContents        string
 	OSReleaseFound       bool
 	OSRelease            OSRelease
+	DiskUsage            dfutils.DiskUsage
 }
 
 type ErrThingFound struct {
@@ -131,12 +138,28 @@ func (c *Commands) CollectPartitionDetails(device string) (result PartitionConte
 	return WithGroupInScopeReturningErr(c, "CollectPartitionDetails", func(c *Commands) (result PartitionContentDetails, err error) {
 		details, err := WithTempMount(c, device, "/mnt", func(c *Commands, mount MountDetails) (result PartitionContentDetails, err error) {
 			result.Device = device
+			efiGrubRoot := filepath.Join(mount.MountPath, "EFI", "ubuntu")
 			grubRoot := filepath.Join(mount.MountPath, "grub")
 			fstabPath := filepath.Join(mount.MountPath, "etc", "fstab")
 			epicAppPath := filepath.Join(mount.MountPath, "home", "epicsystem")
 			osReleasePaths := make([]string, len(DefaultOSReleaseSources))
 			for i, source := range DefaultOSReleaseSources {
 				osReleasePaths[i] = filepath.Join(mount.MountPath, source)
+			}
+			efiGrubPath, err := c.lookForFile(efiGrubRoot, "grub.cfg")
+			if err == nil {
+				result.EFIGrubFound = true
+				result.EFIGrubPath = efiGrubPath
+				bts, err := os.ReadFile(efiGrubPath)
+				if err != nil {
+					return result, fmt.Errorf("error reading file at %s: %w", efiGrubPath, err)
+				}
+				result.EFIGrubContents = string(bts)
+				egc, err := efigrubutils.ParseEFIGrubConfigToTemplate(result.EFIGrubContents)
+				if err != nil {
+					return result, fmt.Errorf("error parsing efi grub config: %w", err)
+				}
+				result.EFIGrubTemplate = egc
 			}
 			grubPath, err := c.lookForFile(grubRoot, "grub.cfg")
 			if err == nil {
@@ -167,6 +190,20 @@ func (c *Commands) CollectPartitionDetails(device string) (result PartitionConte
 				result.OSReleaseFound = true
 				result.OSRelease = osr
 			}
+			dfCmd := c.Cmd("df")
+			err = c.RunCmd(dfCmd)
+			if err != nil {
+				return result, fmt.Errorf("error running df: %w", err)
+			}
+			dfd, err := dfutils.ParseDFOutput(dfCmd.GetStdoutAsString())
+			if err != nil {
+				return result, fmt.Errorf("error parsing df output: %w", err)
+			}
+			dfud, ok := dfd.FindByFilesystem(device)
+			if !ok {
+				return result, fmt.Errorf("device %s not found in df output", device)
+			}
+			result.DiskUsage = dfud
 			return result, nil
 		})
 		if err != nil {
