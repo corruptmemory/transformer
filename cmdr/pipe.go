@@ -39,10 +39,15 @@ type pipedCommands struct {
 	sink      chan subcommandStdErrEvent
 }
 
-func PipeCommands(commands ...Command) Command {
+func PipeCommands(commands ...Command) (Command, error) {
+	for i := 0; i < len(commands)-1; i++ {
+		if err := commands[i].PipeTo(commands[i+1]); err != nil {
+			return nil, err
+		}
+	}
 	return &pipedCommands{
 		commands: commands,
-	}
+	}, nil
 }
 
 func (c *pipedCommands) Running() bool {
@@ -129,12 +134,9 @@ func (c *pipedCommands) PipeTo(command Command) error {
 
 func (c *pipedCommands) stdErrEventHandler() {
 	defer c.wg.Done()
-	for {
-		select {
-		case e := <-c.sink:
-			c.stderr.Write([]byte(e.command + ": "))
-			c.stderr.Write(e.data)
-		}
+	for e := range c.sink {
+		c.stderr.Write([]byte(e.command + ": "))
+		c.stderr.Write(e.data)
 	}
 }
 
@@ -152,12 +154,16 @@ func (c *pipedCommands) Start() (err error) {
 	if c.log != nil {
 		c.log.Info(c.String())
 	}
+	if c.stderr == nil {
+		c.stderr = new(bytes.Buffer)
+	}
 	c.sink = make(chan subcommandStdErrEvent, 100*len(c.commands))
 	c.wg.Add(1)
 	go c.stdErrEventHandler()
 	for _, cmd := range c.commands {
 		stdErrWriter := &subcommandStdErr{
 			command: cmd.String(),
+			sink:    c.sink,
 		}
 		cmd.SetStderr(stdErrWriter)
 		err = cmd.Start()

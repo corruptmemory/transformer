@@ -3,6 +3,7 @@ package cmdr
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
@@ -136,7 +137,7 @@ func (c *simpleCommand) Start() error {
 	err := c.command.Start()
 	if err != nil {
 		if c.log != nil {
-			c.log.Error("Error starting [%s]: %s", c.command.String(), err)
+			c.log.Error(fmt.Sprintf("Error starting [%s]: %s", c.command.String(), err))
 		}
 		return err
 	}
@@ -146,7 +147,7 @@ func (c *simpleCommand) Start() error {
 func (c *simpleCommand) Wait() error {
 	if err := c.command.Wait(); err != nil {
 		if c.log != nil {
-			c.log.Error("Error waiting for [%s]: %s", c.command.String(), err)
+			c.log.Error(fmt.Sprintf("Error waiting for [%s]: %s", c.command.String(), err))
 		}
 		if errors.As(err, &c.exitError) {
 			c.exitCode = c.exitError.ExitCode()
