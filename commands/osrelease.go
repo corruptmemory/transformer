@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"errors"
+
 	"github.com/acobaugh/osrelease"
 )
 
@@ -17,8 +19,8 @@ import (
 // VERSION_CODENAME=focal
 // UBUNTU_CODENAME=focal
 //
-// NAME="Arch Linux"
-// PRETTY_NAME="Arch Linux"
+// NAME="Arch GPLinux"
+// PRETTY_NAME="Arch GPLinux"
 // ID=arch
 // BUILD_ID=rolling
 // ANSI_COLOR="38;2;23;147;209"
@@ -53,8 +55,19 @@ func missingFieldError(field string) error {
 	}
 }
 
-func (o OSRelease) GetOSRelease() (result OSRelease, err error) {
-	r, err := osrelease.Read()
+var ErrNoOSReleaseFound = errors.New("No 'os-release' file found")
+
+const EtcOsRelease = osrelease.EtcOsRelease
+const UsrLibOsRelease = osrelease.UsrLibOsRelease
+
+var DefaultOSReleaseSources = []string{EtcOsRelease, UsrLibOsRelease}
+
+func (c *Commands) GetOSRelease(sources []string) (result OSRelease, err error) {
+	return DoWithSources(c, "GetOSRelease", ErrNoOSReleaseFound, sources, c.GetOSReleaseFromString)
+}
+
+func (c *Commands) GetOSReleaseFromString(data string) (result OSRelease, err error) {
+	r, err := osrelease.ReadString(data)
 	if err != nil {
 		return result, err
 	}
