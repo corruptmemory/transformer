@@ -22,7 +22,7 @@ func InMemoryHandler() (slog.Handler, *bytes.Buffer) {
 	return handler, buf
 }
 
-func InMemeoryCommands(needsSudo bool) (*Commands, *bytes.Buffer) {
+func InMemoryCommands(needsSudo bool) (*Commands, *bytes.Buffer) {
 	handler, buf := InMemoryHandler()
 	log := slog.New(handler)
 	return NewCommands(log, needsSudo), buf
