@@ -6,9 +6,11 @@ import (
 )
 
 func Test_CreateTarball(t *testing.T) {
-	// t.Skipf("Skipping this test because it only runs on my machine")
-	//
-	cmds := DefaultCommands(false)
+	t.Skipf("Skipping this test because it only runs on my machine")
+	cmds, err := DefaultCommands(false)
+	if err != nil {
+		t.Fatalf("error creating commands: %v", err)
+	}
 	ctx := context.Background()
 	events := cmds.CreateTarball(ctx, "/home/jim/saved-downloads", "/home/jim/saved-downloads.tar.zstd")
 	for event := range events {

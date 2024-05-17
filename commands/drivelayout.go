@@ -64,7 +64,6 @@ type PartitionInfo struct {
 	PartitionNumber            int
 	PartitionDevice            string
 	Boot                       bool
-	HasGrubConfig              bool
 	StartSector                int
 	SectorSize                 int
 	GenericPartitionTypeString string
@@ -72,6 +71,15 @@ type PartitionInfo struct {
 	FSTypeString               string
 	FSType                     FSType
 	PartUUID                   string
+	HasGrubConfig              bool
+	GrubCfgPath                string
+	GrubCfgContents            string
+	HasEPICApplication         bool
+	EPICApplicationPath        string
+	HasFstab                   bool
+	FstabContents              string
+	HasOSRelease               bool
+	OSRelease                  OSRelease
 }
 
 func (p *PartitionInfo) updateWithBlkidInfo(in blkidOutput) {
@@ -83,8 +91,16 @@ func (p *PartitionInfo) updateWithPartedInfo(in partedInfo) {
 	p.Boot = in.boot
 }
 
-func (p *PartitionInfo) updateWithGrubCfg(in GrubCfgDetails) {
+func (p *PartitionInfo) updateWithPartitionDetails(in PartitionContentDetails) {
 	p.HasGrubConfig = true
+	p.GrubCfgPath = in.GrubCfgPath
+	p.GrubCfgContents = in.GrubCfgContents
+	p.HasOSRelease = in.OSReleaseFound
+	p.OSRelease = in.OSRelease
+	p.HasEPICApplication = in.EPICApplicationFound
+	p.EPICApplicationPath = in.EPICApplicationPath
+	p.HasFstab = in.FstabFound
+	p.FstabContents = in.FstabContents
 }
 
 type DriveLayout struct {
@@ -411,14 +427,14 @@ func (c *Commands) FindPartitionInfo(diskArrayDevice string) ([]PartitionInfo, e
 				devices = append(devices, pi.PartitionDevice)
 			}
 		}
-		gcs, err := c.FindGrubCfg(devices)
+		partitionDetails, err := c.CollectPartitionDetailsForPartitions(devices)
 		if err != nil {
 			return nil, err
 		}
-		for _, gc := range gcs {
+		for _, detail := range partitionDetails {
 			for i, pi := range pis {
-				if gc.Device == pi.PartitionDevice {
-					pis[i].updateWithGrubCfg(gc)
+				if detail.Device == pi.PartitionDevice {
+					pis[i].updateWithPartitionDetails(detail)
 				}
 			}
 		}

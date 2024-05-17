@@ -4,13 +4,19 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"transformer/cmdr"
+
+	"github.com/mitchellh/go-homedir"
 )
 
 type Commands struct {
 	log       *slog.Logger
 	needsSudo bool
+	homeDir   string
+	tempRoot  string
 }
 
 func InMemoryHandler() (slog.Handler, *bytes.Buffer) {
@@ -22,34 +28,90 @@ func InMemoryHandler() (slog.Handler, *bytes.Buffer) {
 	return handler, buf
 }
 
-func InMemoryCommands(needsSudo bool) (*Commands, *bytes.Buffer) {
+func InMemoryCommands(needsSudo bool) (*Commands, *bytes.Buffer, error) {
 	handler, buf := InMemoryHandler()
 	log := slog.New(handler)
-	return NewCommands(log, needsSudo), buf
+	c, err := NewCommands(log, needsSudo, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, buf, nil
 }
 
-func DefaultCommands(needsSudo bool) *Commands {
-	return NewCommands(slog.Default(), needsSudo)
+func DefaultCommands(needsSudo bool) (*Commands, error) {
+	return NewCommands(slog.Default(), needsSudo, "")
 }
 
-func NewCommands(log *slog.Logger, needsSudo bool) *Commands {
+func NewCommands(log *slog.Logger, needsSudo bool, tempRoot string) (*Commands, error) {
+	hd, err := homedir.Dir()
+	if err != nil {
+		return nil, err
+	}
 	return &Commands{
 		log:       log,
 		needsSudo: needsSudo,
-	}
+		homeDir:   hd,
+		tempRoot:  tempRoot,
+	}, nil
 }
 
 func (c *Commands) With(args ...any) *Commands {
 	return &Commands{
 		needsSudo: c.needsSudo,
 		log:       c.log.With(args...),
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
+}
+
+func (c *Commands) WithTempRoot(tempRoot string) *Commands {
+	return &Commands{
+		needsSudo: c.needsSudo,
+		log:       c.log,
+		homeDir:   c.homeDir,
+		tempRoot:  tempRoot,
+	}
+}
+
+func (c *Commands) TempDir(pattern string) (string, error) {
+	return os.MkdirTemp(c.tempRoot, pattern)
+}
+
+func (c *Commands) ExpandPath(path string) (out string, err error) {
+	exp, err := homedir.Expand(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(exp)
+}
+
+func (c *Commands) MkdirAll(path string, perm os.FileMode) (out string, err error) {
+	ep, err := c.ExpandPath(path)
+	if err != nil {
+		return "", err
+	}
+	err = os.MkdirAll(ep, perm)
+	if err != nil {
+		return "", err
+	}
+	c.Debugf("created directory %s", ep)
+	return ep, nil
+}
+
+func (c *Commands) Cwd() (string, error) {
+	return os.Getwd()
+}
+
+func (c *Commands) HomeDir() string {
+	return c.homeDir
 }
 
 func (c *Commands) WithGroup(name string) *Commands {
 	return &Commands{
 		needsSudo: c.needsSudo,
 		log:       c.log.WithGroup(name),
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
 }
 
@@ -58,6 +120,8 @@ func WithGroupInScopeReturning[T any](c *Commands, name string, body func(c1 *Co
 	c1 := &Commands{
 		needsSudo: c.needsSudo,
 		log:       log,
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
 	return body(c1)
 }
@@ -67,6 +131,8 @@ func WithGroupInScopeReturningErr[T any](c *Commands, name string, body func(c1 
 	c1 := &Commands{
 		needsSudo: c.needsSudo,
 		log:       log,
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
 	return body(c1)
 }
@@ -76,6 +142,8 @@ func (c *Commands) WithGroupInScopeErr(name string, body func(c1 *Commands) erro
 	c1 := &Commands{
 		needsSudo: c.needsSudo,
 		log:       log,
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
 	return body(c1)
 }
@@ -85,6 +153,8 @@ func (c *Commands) WithGroupInScope(name string, body func(c1 *Commands)) {
 	c1 := &Commands{
 		needsSudo: c.needsSudo,
 		log:       log,
+		homeDir:   c.homeDir,
+		tempRoot:  c.tempRoot,
 	}
 	body(c1)
 }

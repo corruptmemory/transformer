@@ -7,4 +7,4 @@ require (
 	github.com/klauspost/compress v1.17.8
 )
 
-require github.com/DataDog/zstd v1.5.5 // indirect
+require github.com/mitchellh/go-homedir v1.1.0 // indirect

@@ -267,7 +267,11 @@ func Test_doRawExtractFromTail(t *testing.T) {
 }
 
 func Test_FindPartitionInfoFromStrings(t *testing.T) {
-	cmds := DefaultCommands(false)
+	cmds, err := DefaultCommands(false)
+	if err != nil {
+		t.Errorf("DefaultCommands() error = %v, want nil", err)
+		return
+	}
 	pis, err := cmds.FindPartitionInfoFromStrings("/dev/md126", sampleFdiskOutput, sampleBlkidOutput, samplePartedOutput)
 	if err != nil {
 		t.Errorf("FindPartitionInfoFromStrings() error = %v, want nil", err)
@@ -292,8 +296,12 @@ func Test_FindPartitionInfoFromStrings(t *testing.T) {
 }
 
 func Test_FindPartitionInfo(t *testing.T) {
-	cmds := DefaultCommands(true)
-	pis, err := cmds.FindPartitionInfo("/dev/nvme0n1")
+	cmds, err := DefaultCommands(true)
+	if err != nil {
+		t.Errorf("DefaultCommands() error = %v, want nil", err)
+		return
+	}
+	pis, err := cmds.FindPartitionInfo("/dev/nvme1n1")
 	if err != nil {
 		t.Errorf("FindPartitionInfo() error = %v, want nil", err)
 		return
