@@ -56,7 +56,11 @@ unused devices: <none>`,
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := DefaultCommands(false)
+			c, err := DefaultCommands(false)
+			if err != nil {
+				t.Errorf("DefaultCommands() error = %v", err)
+				return
+			}
 			gotResult, err := c.FindDiskArrayFromString(tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("FindDiskArrayFromString() error = %v, wantErr %v", err, tt.wantErr)

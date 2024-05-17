@@ -54,13 +54,18 @@ func (c *Commands) TryMountAt(device, mountPoint string) (result MountDetails, e
 	})
 }
 
-func (c *Commands) TryUnmount(mount MountDetails) (err error) {
+func (c *Commands) TryUnmount(mount MountDetails, recursive bool) (err error) {
 	return c.WithGroupInScopeErr("TryUnmount", func(c *Commands) error {
 		if !mount.canUnmount {
 			c.Debugf("cannot unmount %s", mount.MountPath)
 			return nil
 		}
-		umountCmd := c.Cmd("umount", mount.MountPath)
+		var args []string
+		if recursive {
+			args = append(args, "-R")
+		}
+		args = append(args, mount.MountPath)
+		umountCmd := c.Cmd("umount", args...)
 		err := c.RunCmd(umountCmd)
 		if err != nil {
 			return err
@@ -76,7 +81,23 @@ func WithTempMount[T any](c *Commands, device, mountPoint string, body func(c *C
 			return result, err
 		}
 		defer func() {
-			err := c.TryUnmount(mount)
+			err := c.TryUnmount(mount, false)
+			if err != nil {
+				c.Warnf("error unmounting %s: %v", mount.MountPath, err)
+			}
+		}()
+		return body(c, mount)
+	})
+}
+
+func (c *Commands) WithTempMountErr(device, mountPoint string, body func(c *Commands, mount MountDetails) error) (err error) {
+	return c.WithGroupInScopeErr("WithTempMountErr", func(c *Commands) (err error) {
+		mount, err := c.TryMountAt(device, mountPoint)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			err := c.TryUnmount(mount, false)
 			if err != nil {
 				c.Warnf("error unmounting %s: %v", mount.MountPath, err)
 			}
