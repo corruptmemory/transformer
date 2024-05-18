@@ -66,33 +66,62 @@ func main() {
 	err = c.WithTempMountErr(osDevice, "/mnt", func(c *commands.Commands, mount commands.MountDetails) error {
 		c.Infof("OS/EPIC device mounted at %s", mount.MountPath)
 		path, err := c.MkdirAll("./backup", 0755)
+		c.Infof("Backup directory: %s", path)
 		if err != nil {
 			c.Errorf("Error creating backup directory: %v", err)
 			return err
 		}
 		c.Infof("Backing up the OS/EPIC partition")
-		events := c.CreateTarball(context.Background(), mount.MountPath, path+"/os.tar.zstd")
+		return c.WithCd(mount.MountPath, func(c *commands.Commands) (err error) {
+			events := c.CreateTarball(context.Background(), ".", path+"/os.tar.zstd")
+			for e := range events {
+				switch e.Tag {
+				case commands.CTComputingTotalFileSize:
+					c.Info("Computing total file size")
+				case commands.CTTotalFileSizeComputed:
+					c.Infof("Total file size: %d", e.TotalFileSize)
+				case commands.CTWritingFiles:
+					c.Infof("Building backup[%d%%]: %s -> %s", e.ProgressPercent(), e.SourceDir, e.Tarball)
+				case commands.CTSuccess:
+					c.Info("Backup complete")
+				case commands.CTError:
+					c.Errorf("Error building backup: %v", e.Error)
+					return e.Error
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		c.Errorf("Error making OS/EPIC backup: %v", err)
+		return
+	}
+	c.Infof("Test restore of OS/EPIC partition")
+	restorePath, err := c.MkdirAll("/home/jim/ae/restore", 0755)
+	if err != nil {
+		c.Errorf("Error creating restore directory: %v", err)
+		return
+	}
+	err = c.WithCd(restorePath, func(c *commands.Commands) (err error) {
+		events := c.ExtractTarball(context.Background(), "/home/jim/ae/transformer/backup/os.tar.zstd", ".")
 		for e := range events {
 			switch e.Tag {
-			case commands.CTComputingTotalFileSize:
-				c.Info("Computing total file size")
-			case commands.CTTotalFileSizeComputed:
-				c.Infof("Total file size: %d", e.TotalFileSize)
-			case commands.CTWritingFiles:
-				c.Infof("Building backup[%d%%]: %s -> %s", e.ProgressPercent(), e.SourceDir, e.Tarball)
-			case commands.CTSuccess:
-				c.Info("Backup complete")
-			case commands.CTError:
-				c.Errorf("Error building backup: %v", e.Error)
+			case commands.ETTarballFileSize:
+				c.Infof("Tarball file size: %d", e.TotalFileSize)
+			case commands.ETReadingFiles:
+				c.Infof("Extracting backup[%d%%]: %s -> %s", e.ProgressPercent(), e.Tarball, e.TargetDir)
+			case commands.ETSuccess:
+				c.Info("Restore complete")
+			case commands.ETError:
+				c.Errorf("Error restoring backup: %v", e.Error)
 				return e.Error
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		c.Errorf("Error making OS/EPIC backup: %v", err)
+		c.Errorf("Did not restore correctly: %v", err)
 		return
 	}
-	c.Infof("Backing up the OS/EPIC partition")
-
+	c.Infof("OS/EPIC partition backed up and restored successfully")
 }
