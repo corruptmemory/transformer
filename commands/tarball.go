@@ -4,13 +4,16 @@ import (
 	"archive/tar"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sys/unix"
 )
 
 type CreateTarballStatusTag int
@@ -188,23 +191,46 @@ func (c *Commands) CreateTarball(ctx context.Context, sourceDir, tarballPath str
 					// do nothing
 				}
 
-				// Create a new tar header
-				var header *tar.Header
-				header, err = tar.FileInfoHeader(info, info.Name())
-				if err != nil {
-					c.Errorf("Error creating tar header: %v", err)
-					return err
-				}
-
-				// Write the header to the tar archive
-				err = tarWriter.WriteHeader(header)
-				if err != nil {
-					c.Errorf("Error writing header: %v", err)
-					return err
-				}
-
 				// If it's not a directory, write the file data to the tar archive
-				if !info.IsDir() {
+				if info.Mode()&os.ModeSymlink != 0 {
+					var link string
+					link, err = os.Readlink(path)
+					if err != nil {
+						c.Errorf("Error reading symbolic link: %v", err)
+						return err
+					}
+					var header *tar.Header
+					header, err = tar.FileInfoHeader(info, link)
+					if err != nil {
+						c.Errorf("Error creating tar header: %v", err)
+						return err
+					}
+					header.Name = path
+					header.Uid = int(info.Sys().(*syscall.Stat_t).Uid)
+					header.Gid = int(info.Sys().(*syscall.Stat_t).Gid)
+					if err = tarWriter.WriteHeader(header); err != nil {
+						c.Errorf("Error writing header: %v", err)
+						return err
+					}
+				} else if info.Mode().IsRegular() {
+					// Create a new tar header
+					var header *tar.Header
+					header, err = tar.FileInfoHeader(info, info.Name())
+					if err != nil {
+						c.Errorf("Error creating tar header: %v", err)
+						return err
+					}
+					header.Name = path
+					header.Uid = int(info.Sys().(*syscall.Stat_t).Uid)
+					header.Gid = int(info.Sys().(*syscall.Stat_t).Gid)
+
+					// Write the header to the tar archive
+					err = tarWriter.WriteHeader(header)
+					if err != nil {
+						c.Errorf("Error writing header: %v", err)
+						return err
+					}
+
 					var file *os.File
 					file, err = os.Open(path)
 					if err != nil {
@@ -216,6 +242,23 @@ func (c *Commands) CreateTarball(ctx context.Context, sourceDir, tarballPath str
 					_, err = io.Copy(tarWriter, file)
 					if err != nil {
 						c.Errorf("Error writing file data: %v", err)
+						return err
+					}
+				} else if info.IsDir() {
+					var header *tar.Header
+					header, err = tar.FileInfoHeader(info, info.Name())
+					if err != nil {
+						c.Errorf("Error creating tar header: %v", err)
+						return err
+					}
+					header.Name = path
+					header.Uid = int(info.Sys().(*syscall.Stat_t).Uid)
+					header.Gid = int(info.Sys().(*syscall.Stat_t).Gid)
+
+					// Write the header to the tar archive
+					err = tarWriter.WriteHeader(header)
+					if err != nil {
+						c.Errorf("Error writing header: %v", err)
 						return err
 					}
 				}
@@ -326,6 +369,48 @@ func (e *ExtractTarballStatus) ProgressPercent() int {
 	return int(e.Processed * 100 / e.TotalFileSize)
 }
 
+type symlinkData struct {
+	Linkname   string
+	Path       string
+	FileMode   os.FileMode
+	Gid        int
+	Uid        int
+	AccessTime time.Time
+	ChangeTime time.Time
+	ModTime    time.Time
+}
+
+type dirData struct {
+	Path       string
+	FileMode   os.FileMode
+	Gid        int
+	Uid        int
+	AccessTime time.Time
+	ChangeTime time.Time
+	ModTime    time.Time
+}
+
+func changeOwnerOfSymlink(symlinkPath string, uid, gid int) error {
+	if err := syscall.Lchown(symlinkPath, uid, gid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func touchSymlink(symlinkPath string, atime, mtime time.Time) error {
+	tv := []unix.Timeval{
+		unix.NsecToTimeval(atime.UnixNano()),
+		unix.NsecToTimeval(mtime.UnixNano()),
+	}
+
+	// Use lutimes system call to update the timestamps of the symlink itself
+	err := unix.Lutimes(symlinkPath, tv)
+	if err != nil {
+		return fmt.Errorf("failed to update symlink timestamps: %w", err)
+	}
+	return nil
+}
+
 func (c *Commands) ExtractTarball(ctx context.Context, tarballPath, targetDir string) (statusChannel <-chan ExtractTarballStatus) {
 	return WithGroupInScopeReturning(c, "CreateTarball", func(c *Commands) (statusChannel <-chan ExtractTarballStatus) {
 		channel := make(chan ExtractTarballStatus, 1000)
@@ -394,6 +479,9 @@ func (c *Commands) ExtractTarball(ctx context.Context, tarballPath, targetDir st
 			// Read the tar archive from the Zstandard reader
 			tr := tar.NewReader(zr)
 
+			var symlinkDataList []symlinkData
+			var dirDataList []dirData
+
 			for {
 				header, err := tr.Next()
 				if err == io.EOF {
@@ -405,12 +493,53 @@ func (c *Commands) ExtractTarball(ctx context.Context, tarballPath, targetDir st
 				}
 
 				path := filepath.Join(targetDir, header.Name)
+
+				fixupOwner := func() error {
+					err = os.Chown(path, header.Uid, header.Gid)
+					if err != nil {
+						c.Errorf("Error changing ownership of directory %q: %v", path, err)
+						return err
+					}
+					return nil
+				}
+
+				fixupTimes := func() error {
+					err := os.Chtimes(path, header.AccessTime, header.ModTime)
+					if err != nil {
+						c.Errorf("Error changing times of file %q: %v", path, err)
+						return err
+					}
+					return nil
+				}
+
 				switch header.Typeflag {
 				case tar.TypeDir:
 					if err := os.MkdirAll(path, os.FileMode(header.Mode)); err != nil {
 						c.Errorf("Error creating directory %q: %v", path, err)
 						return err
 					}
+					err = os.Chmod(path, os.FileMode(header.Mode))
+					if err != nil {
+						c.Errorf("Error changing permissions of directory %q: %v", path, err)
+						return err
+					}
+					err := fixupOwner()
+					if err != nil {
+						return err
+					}
+					err = fixupTimes()
+					if err != nil {
+						return err
+					}
+					dirDataList = append(dirDataList, dirData{
+						Path:       path,
+						FileMode:   os.FileMode(header.Mode),
+						Gid:        header.Gid,
+						Uid:        header.Uid,
+						AccessTime: header.AccessTime,
+						ChangeTime: header.ChangeTime,
+						ModTime:    header.ModTime,
+					})
 				case tar.TypeReg:
 					file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, os.FileMode(header.Mode))
 					if err != nil {
@@ -424,8 +553,58 @@ func (c *Commands) ExtractTarball(ctx context.Context, tarballPath, targetDir st
 						c.Errorf("Error copying file data: %v", err)
 						return err
 					}
+					err = fixupOwner()
+					if err != nil {
+						return err
+					}
+					err = fixupTimes()
+					if err != nil {
+						return err
+					}
+				case tar.TypeSymlink:
+					symlinkDataList = append(symlinkDataList, symlinkData{
+						Linkname:   header.Linkname,
+						Path:       path,
+						FileMode:   os.FileMode(header.Mode),
+						Gid:        header.Gid,
+						Uid:        header.Uid,
+						AccessTime: header.AccessTime,
+						ChangeTime: header.ChangeTime,
+						ModTime:    header.ModTime,
+					})
 				}
 			}
+
+			for _, sd := range symlinkDataList {
+				if err = os.Symlink(sd.Linkname, sd.Path); err != nil {
+					c.Errorf("Error creating symbolic link %q -> %q: %v", sd.Path, sd.Linkname, err)
+					return err
+				}
+				err = changeOwnerOfSymlink(sd.Path, sd.Uid, sd.Gid)
+				if err != nil {
+					c.Errorf("Error changing ownership of directory %q: %v", sd.Path, err)
+					return err
+				}
+				err = touchSymlink(sd.Path, sd.AccessTime, sd.ModTime)
+				if err != nil {
+					c.Errorf("Error changing times of file %q: %v", sd.Path, err)
+					return err
+				}
+			}
+
+			for _, dd := range dirDataList {
+				err = os.Chmod(dd.Path, dd.FileMode)
+				if err != nil {
+					c.Errorf("Error changing permissions of directory %q: %v", dd.Path, err)
+					return err
+				}
+				err = os.Chtimes(dd.Path, dd.AccessTime, dd.ModTime)
+				if err != nil {
+					c.Errorf("Error changing times of directory %q: %v", dd.Path, err)
+					return err
+				}
+			}
+
 			select {
 			case channel <- ExtractTarballStatus{
 				Tag:           ETSuccess,

@@ -73,6 +73,50 @@ func (c *Commands) WithTempRoot(tempRoot string) *Commands {
 	}
 }
 
+func (c *Commands) Cd(path string) (err error) {
+	ep, err := c.ExpandPath(path)
+	if err != nil {
+		c.Errorf("Could not expand path %s: %v", path, err)
+		return err
+	}
+	err = os.Chdir(ep)
+	if err != nil {
+		c.Errorf("Could not change directory to %s: %v", path, err)
+		return err
+	}
+	c.Debugf("changed directory to %s", ep)
+	return nil
+}
+
+func (c *Commands) WithCd(path string, body func(c *Commands) error) (err error) {
+	cwd, err := c.Cwd()
+	if err != nil {
+		c.Errorf("Could not get current working directory: %v", err)
+		return err
+	}
+	defer func() {
+		err1 := c.Cd(cwd)
+		if err1 != nil {
+			c.Errorf("Could not change directory back to %s: %v", cwd, err1)
+			if err == nil {
+				err = fmt.Errorf("multiple errors -- could not change directory back to %s: %v, %w", cwd, err1, err)
+				return
+			}
+			err = fmt.Errorf("could not change directory back to %s: %w", cwd, err1)
+		}
+	}()
+	ep, err := c.ExpandPath(path)
+	if err != nil {
+		return err
+	}
+	err = os.Chdir(ep)
+	if err != nil {
+		return err
+	}
+	c.Debugf("changed directory to %s", ep)
+	return body(c)
+}
+
 func (c *Commands) TempDir(pattern string) (string, error) {
 	return os.MkdirTemp(c.tempRoot, pattern)
 }
@@ -88,10 +132,17 @@ func (c *Commands) ExpandPath(path string) (out string, err error) {
 func (c *Commands) MkdirAll(path string, perm os.FileMode) (out string, err error) {
 	ep, err := c.ExpandPath(path)
 	if err != nil {
+		c.Errorf("Could not expand path %s: %v", path, err)
+		return "", err
+	}
+	ep, err = filepath.Abs(ep)
+	if err != nil {
+		c.Errorf("Could not get absolute path for %s: %v", ep, err)
 		return "", err
 	}
 	err = os.MkdirAll(ep, perm)
 	if err != nil {
+		c.Errorf("Could not create directory %s: %v", ep, err)
 		return "", err
 	}
 	c.Debugf("created directory %s", ep)
