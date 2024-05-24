@@ -181,4 +181,15 @@ func main() {
 		}
 	}
 	c.Infof("All backups completed... ready to upgrade")
+	c.Infof("Testing Chroot...")
+	chr := c.ChrootBuilder()
+	err = chr.WithChroot(epicDevice, "/mnt", func(c *commands.Commands) error {
+		c.Infof("Chrooted into %s", epicDevice)
+		return nil
+	})
+	if err != nil {
+		c.Errorf("Error testing Chroot: %v", err)
+		return
+	}
+	c.Infof("Chroot test successful")
 }

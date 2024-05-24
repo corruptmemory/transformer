@@ -105,3 +105,25 @@ func (c *Commands) WithTempMountErr(device, mountPoint string, body func(c *Comm
 		return body(c, mount)
 	})
 }
+
+func (c *Commands) Mount(src, target string, options ...string) (err error) {
+	return c.WithGroupInScopeErr("Mount", func(c *Commands) error {
+		mountCmd := c.Cmd("mount", append([]string{src, target}, options...)...)
+		err = c.RunCmd(mountCmd)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (c *Commands) Unmount(target string, options ...string) (err error) {
+	return c.WithGroupInScopeErr("Unmount", func(c *Commands) error {
+		mountCmd := c.Cmd("umount", util.RemoveEmptySplits(append(options, target), true)...)
+		err = c.RunCmd(mountCmd)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
