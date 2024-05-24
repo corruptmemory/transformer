@@ -2,11 +2,26 @@ package main
 
 import (
 	"context"
-
+	"errors"
+	"fmt"
+	"github.com/jessevdk/go-flags"
+	"os"
 	"transformer/commands"
 )
 
-func main() {
+type Upgrader struct {
+}
+
+type RemoteControl struct {
+	Socket string `short:"s" long:"socket" description:"Socket to connect to"`
+}
+
+type Args struct {
+	Upgrader      Upgrader      `command:"upgrade" description:"Upgrade the system"`
+	RemoteControl RemoteControl `command:"remote-control" description:"Control the system remotely"`
+}
+
+func upgrader() {
 	c, err := commands.DefaultCommands(false)
 	if err != nil {
 		panic(err)
@@ -192,4 +207,37 @@ func main() {
 		return
 	}
 	c.Infof("Chroot test successful")
+}
+
+func remoteControl(args RemoteControl) {
+	c, err := commands.DefaultCommands(false)
+	if err != nil {
+		panic(err)
+	}
+
+}
+
+func main() {
+	args := Args{}
+	parser := flags.NewParser(&args, flags.Default)
+	if _, err := parser.Parse(); err != nil {
+		switch flagsErr := err.(type) {
+		case *flags.Error:
+			if errors.Is(flagsErr.Type, flags.ErrHelp) {
+				return
+			}
+			fmt.Printf("Error with command line argument: %v", err)
+		default:
+			fmt.Printf("Error with command line argument: %v", err)
+		}
+		os.Exit(1)
+	}
+
+	switch parser.Active.Name {
+	case "upgrade":
+		upgrader()
+	case "remote-control":
+		remoteControl(args.RemoteControl)
+	}
+
 }
