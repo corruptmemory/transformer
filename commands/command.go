@@ -289,3 +289,7 @@ func (c *Commands) RunCmd(command cmdr.Command) error {
 	}
 	return nil
 }
+
+func (c *Commands) RunCmdAsync(command cmdr.Command) chan cmdr.AsyncRun {
+	return command.RunAsync()
+}
