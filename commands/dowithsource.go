@@ -35,7 +35,7 @@ func DoWithSources[T any](c *Commands, contextName string, errorNotFound error, 
 			return result, nil
 		}
 	}
-	c.Error("%s: no source found", contextName)
+	c.Errorf("%s: no source found", contextName)
 	return result, errorNotFound
 }
 

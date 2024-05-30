@@ -163,3 +163,29 @@ func (c *simpleCommand) Run() error {
 	}
 	return c.Wait()
 }
+
+func (c *simpleCommand) RunAsync() (results chan AsyncRun) {
+	results = make(chan AsyncRun, 100)
+	runner := func() {
+		defer close(results)
+		if err := c.Start(); err != nil {
+			results <- AsyncRun{Tag: ARError, Error: err}
+			return
+		}
+		pid := c.command.Process.Pid
+		results <- AsyncRun{
+			Tag: ARStarted,
+			PID: pid,
+		}
+		if err := c.Wait(); err != nil {
+			results <- AsyncRun{Tag: ARError, Error: err}
+			return
+		}
+		results <- AsyncRun{
+			Tag: ARCompleted,
+			PID: pid,
+		}
+	}
+	go runner()
+	return results
+}

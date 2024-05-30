@@ -40,6 +40,20 @@ type InteractiveSink interface {
 	Sink(output UnifiedCommandOuput) error
 }
 
+type AsyncRunTag int
+
+const (
+	ARStarted AsyncRunTag = iota
+	ARError
+	ARCompleted
+)
+
+type AsyncRun struct {
+	Tag   AsyncRunTag
+	PID   int
+	Error error
+}
+
 type Command interface {
 	String() string
 	GetExitCode() int
@@ -56,6 +70,7 @@ type Command interface {
 	Start() error
 	Wait() error
 	Run() error
+	RunAsync() chan AsyncRun
 	Signal(sig syscall.Signal) error
 	Running() bool
 }

@@ -198,13 +198,22 @@ func upgrader() {
 	c.Infof("All backups completed... ready to upgrade")
 	c.Infof("Testing Chroot...")
 	chr := c.ChrootBuilder()
-	err = chr.WithChroot(epicDevice, "/mnt", func(c *commands.Commands) error {
-		c.Infof("Chrooted into %s", epicDevice)
-		return nil
-	})
+	proxy, err := chr.WithChroot(epicDevice, "/mnt")
 	if err != nil {
 		c.Errorf("Error testing Chroot: %v", err)
 		return
+	}
+	c.Infof("Running test commands in chroot")
+	so, se, err := proxy.RunCmd("ls", "-l", ".")
+	if err != nil {
+		c.Errorf("Error running command: %v", err)
+		return
+	}
+	c.Infof("STDOUT: %s", so)
+	c.Infof("STDERR: %s", se)
+	err = proxy.Terminate()
+	if err != nil {
+		c.Errorf("Error terminating chroot: %v", err)
 	}
 	c.Infof("Chroot test successful")
 }
@@ -214,7 +223,12 @@ func remoteControl(args RemoteControl) {
 	if err != nil {
 		panic(err)
 	}
-
+	err = c.StartRemoteControlSession(args.Socket)
+	if err != nil {
+		c.Errorf("Failed to start remote control session: %v", err)
+		return
+	}
+	c.Infof("Remote control session finished")
 }
 
 func main() {

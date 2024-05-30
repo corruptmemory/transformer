@@ -209,6 +209,49 @@ func (c *pipedCommands) Run() error {
 	return c.Wait()
 }
 
+func (c *pipedCommands) findFirstPid() (pid int, err error) {
+	fst := c.commands[0]
+	switch x := fst.(type) {
+	case *simpleCommand:
+		return x.command.Process.Pid, nil
+	case *pipedCommands:
+		return x.findFirstPid()
+	default:
+		return 0, fmt.Errorf("unknown command type: %T", fst)
+	}
+}
+
+func (c *pipedCommands) RunAsync() (results chan AsyncRun) {
+	results = make(chan AsyncRun, 100)
+	runner := func() {
+		defer close(results)
+		if err := c.Start(); err != nil {
+			results <- AsyncRun{Tag: ARError, Error: err}
+			return
+		}
+		pid, err := c.findFirstPid()
+		if err != nil {
+			_ = c.Signal(syscall.SIGKILL)
+			results <- AsyncRun{Tag: ARError, Error: err}
+			return
+		}
+		results <- AsyncRun{
+			Tag: ARStarted,
+			PID: pid,
+		}
+		if err := c.Wait(); err != nil {
+			results <- AsyncRun{Tag: ARError, Error: err}
+			return
+		}
+		results <- AsyncRun{
+			Tag: ARCompleted,
+			PID: pid,
+		}
+	}
+	go runner()
+	return results
+}
+
 func (c *pipedCommands) Signal(sig syscall.Signal) error {
 	for _, cmd := range c.commands {
 		if err := cmd.Signal(sig); err != nil {
