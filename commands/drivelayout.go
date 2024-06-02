@@ -70,8 +70,6 @@ type PartitionInfo struct {
 	GenericPartitionType       GenericPartitionType
 	FSTypeString               string
 	FSType                     FSType
-	FSTypeUUID                 string
-	UUID                       string
 	PartUUID                   string
 	HasGrubConfig              bool
 	GrubCfgPath                string

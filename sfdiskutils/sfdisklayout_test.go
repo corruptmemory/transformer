@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 const sampleSFdiskOutput = `label: gpt
@@ -33,17 +35,32 @@ sector-size: 512
 /dev/nvme0n1p4 : start=  1952141312, size=     1380352, type=DE94BBA4-06D1-4D40-A16A-BFD50179D6AC, uuid=0FE884DA-F952-433F-88C3-0D485E0CA1B4, attrs="RequiredPartition GUID:63"
 /dev/nvme0n1p5 : start=  1950959616, size=     1181696, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=9775F831-4FBC-4D1D-AAB2-A941E0864289, name="EFI system partition", attrs="GUID:63"`
 
+const splitOutputTemplate = `label: gpt
+label-id: E853A34B-04E2-4185-AA37-778F397FA222
+device: /dev/md126
+unit: sectors
+first-lba: 2048
+last-lba: 937693150
+sector-size: 512
+
+/dev/md126p1 : start=        2048, size=     2201600, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=FD0F94BA-9DC1-4686-9C07-10BD5209819D
+/dev/md126p2 : start=     2203648, size=     3145728, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=B1E70819-D0C7-4114-A581-F3B5716DA01C
+/dev/md126p3 : start=     5349376, size=   361315328, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=3463082E-C8A5-4BFB-85DA-2E87553062D2
+/dev/md126p5 : start=   366664704, size=   361315328, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=%s
+/dev/md126p4 : start=   727980032, size=   209711104, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=D0E8CCD9-54C1-49B8-BA74-BF3D7C3FA800
+`
+
 func TestParseSFdiskLayout(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       string
-		wantResult SFdiskLayout
+		wantResult SFDiskLayout
 		wantErr    bool
 	}{
 		{
 			name: "Linux text",
 			args: sampleSFdiskOutput,
-			wantResult: SFdiskLayout{
+			wantResult: SFDiskLayout{
 				Label:      "gpt",
 				LabelID:    "E853A34B-04E2-4185-AA37-778F397FA222",
 				Device:     "/dev/md126",
@@ -86,7 +103,7 @@ func TestParseSFdiskLayout(t *testing.T) {
 		{
 			name: "Windows text",
 			args: sampleSFdiskOuput1,
-			wantResult: SFdiskLayout{
+			wantResult: SFDiskLayout{
 				Label:      "gpt",
 				LabelID:    "0044CD4E-49CE-4A27-8A2E-195DEF119571",
 				Device:     "/dev/nvme0n1",
@@ -154,5 +171,21 @@ func TestParseSFdiskLayout(t *testing.T) {
 			}
 			fmt.Println(gotResult.String())
 		})
+	}
+}
+
+func TestSplitPartition(t *testing.T) {
+	dl, err := ParseSFdiskLayout(sampleSFdiskOutput)
+	if err != nil {
+		t.Errorf("error parsing sfdisk output: %v", err)
+	}
+	testUUID := uuid.New().String()
+	err = dl.SplitPartitionEqually(3, testUUID, "", "")
+	if err != nil {
+		t.Errorf("error splitting partition: %v", err)
+	}
+	testOutput := fmt.Sprintf(splitOutputTemplate, testUUID)
+	if dl.String() != testOutput {
+		t.Errorf("unexpected output: %v", dl.String())
 	}
 }

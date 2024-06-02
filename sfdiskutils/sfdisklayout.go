@@ -19,10 +19,12 @@ type SFPartitionInfo struct {
 	Attrs     string
 }
 
-// /dev/nvme0n1p1 : start=        2048, size=      204800, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, uuid=61E4439A-8668-4FE9-9371-4CD688886A8F, name="EFI system partition", attrs="GUID:63"
 func (s *SFPartitionInfo) String() string {
-	base := fmt.Sprintf("%s : start=%12d, size=%12d, type=%s, uuid=%s",
-		s.Partition, s.Start, s.Size, s.TypeUUID, s.PartUUID)
+	base := fmt.Sprintf("%s : start=%12d, size=%12d, type=%s",
+		s.Partition, s.Start, s.Size, s.TypeUUID)
+	if s.PartUUID != "" {
+		base += fmt.Sprintf(", uuid=%s", s.PartUUID)
+	}
 	if s.Name != "" {
 		base += fmt.Sprintf(", name=%q", s.Name)
 	}
@@ -45,14 +47,10 @@ func (s *SFPartitionInfo) validPartition() error {
 	if s.TypeUUID == "" {
 		return fmt.Errorf("error: type-uuid is empty")
 	}
-	if s.PartUUID == "" {
-		return fmt.Errorf("error: part-uuid is empty")
-	}
 	return nil
 }
 
-// SFdiskLayout represents the layout of a disk as reported by sfdisk.
-type SFdiskLayout struct {
+type SFDiskLayout struct {
 	Label      string
 	LabelID    string
 	Device     string
@@ -63,7 +61,176 @@ type SFdiskLayout struct {
 	Partitions []SFPartitionInfo
 }
 
-func (s *SFdiskLayout) String() string {
+func (s *SFDiskLayout) AddPartition(start, size int, typeUUID, partUUID, name, attrs string) (err error) {
+	end := start + size
+	initialFreeSpaceStart := s.FirstLBA
+	var initialFreeSpaceEnd int
+	if initialFreeSpaceStart < 2048 {
+		initialFreeSpaceStart = 2048
+	}
+	if len(s.Partitions) > 0 {
+		initialFreeSpaceEnd = s.Partitions[0].Start
+	} else {
+		initialFreeSpaceEnd = s.LastLBA
+	}
+	nextAvailablePartition := func() (partition int, err error) {
+		for i := 1; i < 100; i++ {
+			found := false
+			for _, part := range s.Partitions {
+				if part.Partition == s.Device+"p"+strconv.Itoa(i) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return i, nil
+			}
+		}
+		return 0, fmt.Errorf("error: no available partition number")
+	}
+	followingFreeInfo := func(partIdx int) (start int, size int, err error) {
+		switch {
+		case partIdx < len(s.Partitions)-1:
+			fst := s.Partitions[partIdx].Start + s.Partitions[partIdx].Size
+			fse := s.Partitions[partIdx+1].Start
+			fs := fse - fst
+			return fst, fs, nil
+		case partIdx == len(s.Partitions)-1:
+			fst := s.Partitions[partIdx].Start + s.Partitions[partIdx].Size
+			fse := s.LastLBA
+			fs := fse - fst
+			return fst, fs, nil
+		default:
+			return 0, 0, fmt.Errorf("error: partIdx out of range")
+		}
+	}
+	if start < initialFreeSpaceStart {
+		return fmt.Errorf("error: partition defined before initial free space")
+	}
+	if len(s.Partitions) == 0 {
+		if end > initialFreeSpaceEnd {
+			return fmt.Errorf("error: partition does not fit in free space")
+		}
+		s.Partitions = append(s.Partitions, SFPartitionInfo{
+			Partition: s.Device + "p1",
+			Start:     start,
+			Size:      size,
+			TypeUUID:  typeUUID,
+			PartUUID:  partUUID,
+			Name:      name,
+			Attrs:     attrs,
+		})
+		return nil
+	}
+	if start < s.Partitions[0].Start {
+		if start+size > s.Partitions[0].Start {
+			return fmt.Errorf("error: partition overlaps with existing partition")
+		}
+		pn, err := nextAvailablePartition()
+		if err != nil {
+			return err
+		}
+		s.Partitions = append(s.Partitions, SFPartitionInfo{
+			Partition: s.Device + "p" + strconv.Itoa(pn),
+			Start:     start,
+			Size:      size,
+			TypeUUID:  typeUUID,
+			PartUUID:  partUUID,
+			Name:      name,
+			Attrs:     attrs,
+		})
+		s.EnsureSortedPartitions()
+		return nil
+	}
+	for i, part := range s.Partitions {
+		if start < part.Start {
+			if start+size > part.Start {
+				return fmt.Errorf("error: partition overlaps with existing partition")
+			}
+			fst, fs, err := followingFreeInfo(i - 1)
+			if err != nil {
+				return err
+			}
+			if start < fst || end > fst+fs {
+				return fmt.Errorf("error: partition does not fit in free space")
+			}
+			pn, err := nextAvailablePartition()
+			if err != nil {
+				return err
+			}
+			s.Partitions = append(s.Partitions, SFPartitionInfo{
+				Partition: s.Device + "p" + strconv.Itoa(pn),
+				Start:     start,
+				Size:      size,
+				TypeUUID:  typeUUID,
+				PartUUID:  partUUID,
+				Name:      name,
+				Attrs:     attrs,
+			})
+			s.EnsureSortedPartitions()
+			return nil
+		}
+	}
+
+	fst, fs, err := followingFreeInfo(len(s.Partitions) - 1)
+	if err != nil {
+		return err
+	}
+	if start < fst || end > fst+fs {
+		return fmt.Errorf("error: partition does not fit in free space")
+	}
+	pn, err := nextAvailablePartition()
+	if err != nil {
+		return err
+	}
+	s.Partitions = append(s.Partitions, SFPartitionInfo{
+		Partition: s.Device + "p" + strconv.Itoa(pn),
+		Start:     start,
+		Size:      size,
+		TypeUUID:  typeUUID,
+		PartUUID:  partUUID,
+		Name:      name,
+		Attrs:     attrs,
+	})
+	s.EnsureSortedPartitions()
+	return nil
+}
+
+func (s *SFDiskLayout) DeletePartition(idx int) (err error) {
+	targetPartitonName := s.Device + "p" + strconv.Itoa(idx)
+	for i, part := range s.Partitions {
+		if part.Partition == targetPartitonName {
+			s.Partitions = append(s.Partitions[:i], s.Partitions[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("error: partition not found")
+}
+
+func (s *SFDiskLayout) FindPartition(idx int) (pi *SFPartitionInfo, err error) {
+	targetPartitonName := s.Device + "p" + strconv.Itoa(idx)
+	for i, part := range s.Partitions {
+		if part.Partition == targetPartitonName {
+			return &s.Partitions[i], nil
+		}
+	}
+	return nil, fmt.Errorf("error: partition not found")
+}
+
+func (s *SFDiskLayout) SplitPartitionEqually(idx int, partUUID, name, attrs string) (err error) {
+	part, err := s.FindPartition(idx)
+	if err != nil {
+		return err
+	}
+	newSize := part.Size / 2
+	if newSize < 1 {
+		return fmt.Errorf("error: partition too small to split")
+	}
+	part.Size = newSize
+	return s.AddPartition(part.Start+part.Size, newSize, part.TypeUUID, partUUID, name, attrs)
+}
+
+func (s *SFDiskLayout) String() string {
 	base := fmt.Sprintf("label: %s\nlabel-id: %s\ndevice: %s\nunit: %s\nfirst-lba: %d\nlast-lba: %d\nsector-size: %d\n\n",
 		s.Label, s.LabelID, s.Device, s.Unit, s.FirstLBA, s.LastLBA, s.SectorSize)
 	for _, part := range s.Partitions {
@@ -72,13 +239,13 @@ func (s *SFdiskLayout) String() string {
 	return base
 }
 
-func (s *SFdiskLayout) EnsureSortedPartitions() {
+func (s *SFDiskLayout) EnsureSortedPartitions() {
 	slices.SortFunc(s.Partitions, func(a, b SFPartitionInfo) int {
 		return a.Start - b.Start
 	})
 }
 
-func (s *SFdiskLayout) validHeader() (err error) {
+func (s *SFDiskLayout) validHeader() (err error) {
 	if s.Label == "" {
 		return fmt.Errorf("error: label is empty")
 	}
@@ -103,7 +270,7 @@ func (s *SFdiskLayout) validHeader() (err error) {
 	return nil
 }
 
-func ParseSFdiskLayout(in string) (result SFdiskLayout, err error) {
+func ParseSFdiskLayout(in string) (result SFDiskLayout, err error) {
 	lines := util.SplitLines(strings.TrimSpace(in))
 	var i int
 	var line string
@@ -111,7 +278,7 @@ headerDone:
 	for i, line = range lines {
 		parts := util.RemoveEmptySplits(strings.Split(line, ":"), true)
 		if len(parts) > 2 {
-			return SFdiskLayout{}, fmt.Errorf("error: found header line we weren't expecing: %s", line)
+			return SFDiskLayout{}, fmt.Errorf("error: found header line we weren't expecing: %s", line)
 		}
 		if len(parts) == 0 {
 			break headerDone
@@ -129,28 +296,28 @@ headerDone:
 			case "first-lba":
 				result.FirstLBA, err = strconv.Atoi(parts[1])
 				if err != nil {
-					return SFdiskLayout{}, fmt.Errorf("error parsing first-lba: %s", err)
+					return SFDiskLayout{}, fmt.Errorf("error parsing first-lba: %s", err)
 				}
 			case "last-lba":
 				result.LastLBA, err = strconv.Atoi(parts[1])
 				if err != nil {
-					return SFdiskLayout{}, fmt.Errorf("error parsing last-lba: %s", err)
+					return SFDiskLayout{}, fmt.Errorf("error parsing last-lba: %s", err)
 				}
 			case "sector-size":
 				result.SectorSize, err = strconv.Atoi(parts[1])
 				if err != nil {
-					return SFdiskLayout{}, fmt.Errorf("error parsing sector-size: %s", err)
+					return SFDiskLayout{}, fmt.Errorf("error parsing sector-size: %s", err)
 				}
 			}
 		}
 	}
 	if err = result.validHeader(); err != nil {
-		return SFdiskLayout{}, err
+		return SFDiskLayout{}, err
 	}
 
 	parsedLines, err := parsePartitionLines(lines[i+1:])
 	if err != nil {
-		return SFdiskLayout{}, err
+		return SFDiskLayout{}, err
 	}
 	result.Partitions = parsedLines
 	result.EnsureSortedPartitions()
