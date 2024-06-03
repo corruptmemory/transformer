@@ -19,6 +19,16 @@ type SFPartitionInfo struct {
 	Attrs     string
 }
 
+func (s *SFPartitionInfo) PartitionNumber() (int, error) {
+	fmt.Printf("partition: %s\n", s.Partition)
+	for i := len(s.Partition) - 1; i > 0; i-- {
+		if s.Partition[i] < '0' || s.Partition[i] > '9' {
+			return strconv.Atoi(s.Partition[i+1:])
+		}
+	}
+	return 0, fmt.Errorf("error: partition number not found")
+}
+
 func (s *SFPartitionInfo) String() string {
 	base := fmt.Sprintf("%s : start=%12d, size=%12d, type=%s",
 		s.Partition, s.Start, s.Size, s.TypeUUID)

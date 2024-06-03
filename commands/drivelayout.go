@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"transformer/blkidutils"
 
 	"transformer/util"
 )
@@ -70,6 +71,7 @@ type PartitionInfo struct {
 	GenericPartitionType       GenericPartitionType
 	FSTypeString               string
 	FSType                     FSType
+	UUID                       string
 	PartUUID                   string
 	HasGrubConfig              bool
 	GrubCfgPath                string
@@ -82,9 +84,10 @@ type PartitionInfo struct {
 	OSRelease                  OSRelease
 }
 
-func (p *PartitionInfo) updateWithBlkidInfo(in blkidOutput) {
-	p.FSType = in.toFSType()
-	p.FSTypeString = in.tpe
+func (p *PartitionInfo) updateWithBlkidInfo(in blkidutils.BlkIdPartitionInfo) {
+	p.FSType = fromStringToFSType(in.Type)
+	p.UUID = in.UUID
+	p.FSTypeString = in.Type
 }
 
 func (p *PartitionInfo) updateWithPartedInfo(in partedInfo) {
@@ -244,70 +247,6 @@ func (c fdiskColumnOffsets) String() string {
 	return fmt.Sprintf("device: %d, start: %d, sectors: %d, type: %d, uuid: %d", c.device, c.start, c.sectors, c.tpe, c.uuid)
 }
 
-type blkidOutput struct {
-	partitionNumber int
-	partitionDevice string
-	tpe             string
-}
-
-func (b blkidOutput) toFSType() FSType {
-	return fromStringToFSType(b.tpe)
-}
-
-func findBlkidOutput(line string) (result blkidOutput, err error) {
-	parts := util.RemoveEmptySplits(strings.Split(line, ":"), true)
-	if len(parts) != 2 {
-		return result, fmt.Errorf("unexpected number of parts: %d given line: %s", len(parts), line)
-	}
-	pd := parts[0]
-	var partitionNumber string
-	for i := len(pd) - 1; i >= 0; i-- {
-		if pd[i] == 'p' {
-			partitionNumber = pd[i+1:]
-			break
-		}
-	}
-	if len(partitionNumber) == 0 {
-		return result, fmt.Errorf("partition number not found")
-	}
-	pn, err := strconv.Atoi(partitionNumber)
-	if err != nil {
-		return result, fmt.Errorf("partition number not found: %v given %s", err, partitionNumber)
-	}
-
-	rhsParts := util.RemoveEmptySplits(strings.Split(parts[1], " "), true)
-	if len(rhsParts) < 3 {
-		return result, fmt.Errorf("unexpected number of parts in right hand side: %d given line: %s", len(rhsParts), line)
-	}
-	for _, part := range rhsParts {
-		if strings.HasPrefix(part, "TYPE=") {
-			tpe := strings.TrimPrefix(part, `TYPE="`)
-			tpe = strings.TrimSuffix(tpe, `"`)
-			return blkidOutput{
-				partitionNumber: pn,
-				partitionDevice: pd,
-				tpe:             strings.TrimSpace(tpe),
-			}, nil
-		}
-	}
-	return blkidOutput{
-		partitionNumber: pn,
-		partitionDevice: pd,
-		tpe:             "unknown",
-	}, nil
-}
-
-func findBlkidOutputs(lines []string) (result []blkidOutput, err error) {
-	for _, line := range lines {
-		output, err := findBlkidOutput(line)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, output)
-	}
-	return
-}
-
 func findColumnOffsets(device string, table []string) (offsets fdiskColumnOffsets, err error) {
 	deviceWithPartition := device + "p1" // assumes fewer than 10 partitions -- This is just an example to compute the length of the device name with partition number
 	lengthOfDeviceWithPartition := len(deviceWithPartition)
@@ -355,15 +294,9 @@ func (c *Commands) FindPartitionInfoFromStrings(diskArrayDevice, fdiskOutput, bl
 		return nil, fmt.Errorf("could not determine column offsets for fdisk output: %v", err)
 	}
 	rawExtract := doRawExtract(table, offsets)
-	blkRe, err := regexp.Compile(diskArrayDevice + "p[0-9]+:")
+	blkidOutputs, err := blkidutils.ParseBlkIdLayout(diskArrayDevice, blkidOutput)
 	if err != nil {
-		return nil, fmt.Errorf("regexp.Compile() error = %v", err)
-	}
-	blkidGrep := util.NewGrep(blkRe)
-	blkidLines := blkidGrep.MatchLinesInString(blkidOutput)
-	blkidOutputs, err := findBlkidOutputs(blkidLines)
-	if err != nil {
-		return nil, fmt.Errorf("findBlkidOutputs() error = %v", err)
+		return nil, fmt.Errorf("ParseBlkIdLayout() error = %v", err)
 	}
 	po, err := parsePartedString(partedOutput)
 	if err != nil {
@@ -377,9 +310,13 @@ func (c *Commands) FindPartitionInfoFromStrings(diskArrayDevice, fdiskOutput, bl
 		}
 		result = append(result, pi)
 	}
-	for _, blkid := range blkidOutputs {
+	for _, blkid := range blkidOutputs.Partitions {
 		for i, r := range result {
-			if blkid.partitionNumber == r.PartitionNumber {
+			pn, err := blkid.PartitionNumber()
+			if err != nil {
+				return nil, fmt.Errorf("PartitionNumber() error = %v", err)
+			}
+			if pn == r.PartitionNumber {
 				result[i].updateWithBlkidInfo(blkid)
 			}
 		}

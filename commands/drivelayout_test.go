@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -108,7 +109,7 @@ const sampleTable = `Device           Start   Sectors Type             UUID
 /dev/md126p3   5349376 722630656 Linux filesystem EAB72850-85E0-4132-8546-50B5A391B274
 /dev/md126p4 727980032 209711104 Linux filesystem 9C564E76-291E-4E63-94DB-FB430379FFA9`
 
-const sampleBlkidOutput = `dev/sdb: TYPE="isw_raid_member"
+const sampleBlkidOutput = `/dev/sdb: TYPE="isw_raid_member"
 /dev/sda: TYPE="isw_raid_member"
 /dev/sdc1: UUID="3F17-2AE2" TYPE="vfat" PARTUUID="5d6dc46a-6d80-44b2-96ed-5c68dd4983fe"
 /dev/sdc2: UUID="2d905233-a877-49d6-922c-15e11c96663f" TYPE="ext4" PARTUUID="c7cf9b42-3bfa-4cc4-8ffb-82a017b76157"
@@ -179,6 +180,7 @@ var expectedPIS = []PartitionInfo{
 		GenericPartitionType:       GPEFI,
 		FSTypeString:               "vfat",
 		FSType:                     FSVFAT,
+		UUID:                       "0386-7550",
 		PartUUID:                   "87BAC5EF-0E98-4402-BE33-D9469DF5950A",
 	},
 	{
@@ -191,6 +193,7 @@ var expectedPIS = []PartitionInfo{
 		GenericPartitionType:       GPLinux,
 		FSTypeString:               "ext4",
 		FSType:                     FSExt4,
+		UUID:                       "e8f4cc8a-de54-4096-8838-e0f2dacc9c9d",
 		PartUUID:                   "A6C75110-02A4-4867-8D42-34FA925E13A5",
 	},
 	{
@@ -203,6 +206,7 @@ var expectedPIS = []PartitionInfo{
 		GenericPartitionType:       GPLinux,
 		FSTypeString:               "crypto_LUKS",
 		FSType:                     FSCryptoLUKS,
+		UUID:                       "ce50ebb8-68cd-49ad-b885-20e7676e9718",
 		PartUUID:                   "EAB72850-85E0-4132-8546-50B5A391B274",
 	},
 	{
@@ -215,6 +219,7 @@ var expectedPIS = []PartitionInfo{
 		GenericPartitionType:       GPLinux,
 		FSTypeString:               "ext4",
 		FSType:                     FSExt4,
+		UUID:                       "ccb2493d-7ac9-4a9a-8f30-97533a0705d8",
 		PartUUID:                   "9C564E76-291E-4E63-94DB-FB430379FFA9",
 	},
 }
@@ -284,7 +289,7 @@ func Test_FindPartitionInfoFromStrings(t *testing.T) {
 	for _, pi := range pis {
 		matched := false
 		for _, e := range expectedPIS {
-			if pi == e {
+			if reflect.DeepEqual(e, pi) {
 				matched = true
 				break
 			}

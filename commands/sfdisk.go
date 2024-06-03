@@ -13,7 +13,7 @@ func (c *Commands) SFDiskData(diskArrayDevice string) (result sfdiskutils.SFDisk
 		if err != nil {
 			c.Errorf("Error running sfdisk command: %v", err)
 			c.Errorf("STDOUT: %s", sfdiskCmd.GetStdoutAsString())
-			c.Errorf("STDERR: %s", sfdiskCmd.GetStdoutAsString())
+			c.Errorf("STDERR: %s", sfdiskCmd.GetStderrAsString())
 			return result, fmt.Errorf("error running sfdisk command: %v", err)
 		}
 		result, err = sfdiskutils.ParseSFdiskLayout(sfdiskCmd.GetStdoutAsString())
@@ -37,7 +37,7 @@ func (c *Commands) SFDiskApply(diskArrayDevice string, layout sfdiskutils.SFDisk
 			c.Errorf("Error running sfdisk command: %v", err)
 			c.Errorf("STDIN: %s", layoutString)
 			c.Errorf("STDOUT: %s", sfdiskCmd.GetStdoutAsString())
-			c.Errorf("STDERR: %s", sfdiskCmd.GetStdoutAsString())
+			c.Errorf("STDERR: %s", sfdiskCmd.GetStderrAsString())
 			return fmt.Errorf("error running sfdisk command: %v", err)
 		}
 		return nil
