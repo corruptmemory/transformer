@@ -196,26 +196,26 @@ func upgrader() {
 		}
 	}
 	c.Infof("All backups completed... ready to upgrade")
-	c.Infof("Testing Chroot...")
-	chr := c.ChrootBuilder()
-	proxy, err := chr.WithChroot(epicDevice, "/mnt")
-	if err != nil {
-		c.Errorf("Error testing Chroot: %v", err)
-		return
-	}
-	c.Infof("Running test commands in chroot")
-	so, se, err := proxy.RunCmd("ls", "-l", ".")
-	if err != nil {
-		c.Errorf("Error running command: %v", err)
-		return
-	}
-	c.Infof("STDOUT: %s", so)
-	c.Infof("STDERR: %s", se)
-	err = proxy.Terminate()
-	if err != nil {
-		c.Errorf("Error terminating chroot: %v", err)
-	}
-	c.Infof("Chroot test successful")
+	//c.Infof("Testing Chroot...")
+	//chr := c.ChrootBuilder()
+	//proxy, err := chr.WithChroot(epicDevice, "/mnt")
+	//if err != nil {
+	//	c.Errorf("Error testing Chroot: %v", err)
+	//	return
+	//}
+	//c.Infof("Running test commands in chroot")
+	//so, se, err := proxy.RunCmd("ls", "-l", ".")
+	//if err != nil {
+	//	c.Errorf("Error running command: %v", err)
+	//	return
+	//}
+	//c.Infof("STDOUT: %s", so)
+	//c.Infof("STDERR: %s", se)
+	//err = proxy.Terminate()
+	//if err != nil {
+	//	c.Errorf("Error terminating chroot: %v", err)
+	//}
+	//c.Infof("Chroot test successful")
 }
 
 func remoteControl(args RemoteControl) {
