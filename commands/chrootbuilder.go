@@ -283,6 +283,123 @@ type WithChrootResults struct {
 	Err error
 }
 
+func (cb *ChrootBuilder) WithChrootNoMount(targetDir string) (result *ChrootProxy, err error) {
+	wg := &sync.WaitGroup{}
+	chrootResultsChannel := make(chan WithChrootResults, 100)
+	chrootRunner := func() {
+		var err error
+		defer func() {
+			if err != nil {
+				chrootResultsChannel <- WithChrootResults{Tag: WCRError, Err: err}
+			}
+			close(chrootResultsChannel)
+			wg.Done()
+		}()
+		err = cb.c.WithGroupInScopeErr("ChrootBuilder.WithChroot", func(c *Commands) (err error) {
+			defer func() {
+				err1 := cb.Teardown()
+				if err1 != nil {
+					if err != nil {
+						err = fmt.Errorf("multiple errors: %v, %v", err, err1)
+					} else {
+						err = err1
+					}
+				}
+			}()
+			err = cb.Setup(targetDir)
+			if err != nil {
+				return err
+			}
+
+			c.Infof("Chrooted into %s", targetDir)
+			cmd := c.Cmd("chroot", "/mnt", "bash", "-c", "source /etc/profile; cd /; /tmp/remote-control/upgrader remote-control --socket /tmp/remote-control/remote-control.sock")
+			stdOutReader, stdOutWriter, err := os.Pipe()
+			if err != nil {
+				return err
+			}
+			stdErrReader, stdErrWriter, err := os.Pipe()
+			if err != nil {
+				stdOutWriter.Close()
+				stdOutReader.Close()
+				return err
+			}
+			cmd.SetStdout(stdOutWriter)
+			cmd.SetStderr(stdErrWriter)
+			go func() {
+				defer func() {
+					stdOutWriter.Close()
+					stdOutReader.Close()
+				}()
+				io.Copy(os.Stdout, stdOutReader)
+			}()
+			go func() {
+				defer func() {
+					stdErrWriter.Close()
+					stdErrReader.Close()
+				}()
+				io.Copy(os.Stderr, stdErrReader)
+			}()
+
+			asyncCmd := c.RunCmdAsync(cmd)
+			for c := range asyncCmd {
+				switch c.Tag {
+				case cmdr.ARStarted:
+					cb.c.Infof("Chroot running...")
+					chrootResultsChannel <- WithChrootResults{Tag: WCRRemoteControlRunning}
+				case cmdr.ARError:
+					cb.c.Errorf("Got error: %v", c.Error)
+					if err == nil {
+						err = c.Error
+					}
+				case cmdr.ARCompleted:
+					cb.c.Infof("Chroot finished...")
+				}
+			}
+			return err
+		})
+	}
+	wg.Add(1)
+	go chrootRunner()
+resultChannelLoop:
+	for c := range chrootResultsChannel {
+		switch c.Tag {
+		case WCRError:
+			err = c.Err
+			return
+		case WCRRemoteControlRunning:
+			break resultChannelLoop
+		}
+	}
+	for {
+		cb.c.Infof("Looking for remote-control.sock...")
+		e, f, _, err := util.WhatsThere("./remote-control.sock")
+		if err != nil {
+			cb.c.Errorf("Error checking for remote-control.sock: %v", err)
+			return nil, err
+		}
+		if e && f {
+			cb.c.Infof("Found remote-control.sock")
+			conn, err := net.Dial("unix", "./remote-control.sock")
+			cb.c.Infof("Connected remote-control.sock")
+			if err != nil {
+				cb.c.Errorf("Error connecting to remote-control.sock: %v", err)
+				return nil, err
+			}
+			result = &ChrootProxy{
+				c:                    cb.c,
+				conn:                 conn,
+				wg:                   wg,
+				chrootResultsChannel: chrootResultsChannel,
+				enc:                  gob.NewEncoder(conn),
+				dec:                  gob.NewDecoder(conn),
+			}
+			return result, nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+}
+
 func (cb *ChrootBuilder) WithChroot(device, targetDir string) (result *ChrootProxy, err error) {
 	wg := &sync.WaitGroup{}
 	chrootResultsChannel := make(chan WithChrootResults, 100)

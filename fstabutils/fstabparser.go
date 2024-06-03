@@ -50,7 +50,7 @@ type FstabTemplateInput struct {
 	RecordingsDevice string
 }
 
-func ProcessFstab(fstab string) (result FstabProcessResult, err error) {
+func ProcessFstab(fstab string, requireRecordingsDeviceEntry bool) (result FstabProcessResult, err error) {
 	templateBuffer := strings.Builder{}
 	var originalRootDevice string
 	var originalBootDevice string
@@ -65,17 +65,17 @@ func ProcessFstab(fstab string) (result FstabProcessResult, err error) {
 			switch splits[1] {
 			case "/":
 				originalRootDevice = splits[0]
-				templateBuffer.WriteString("{{ .RootDevice }}" + strings.Join(splits[1:], " ") + "\n")
+				templateBuffer.WriteString("{{ .RootDevice }} " + strings.Join(splits[1:], " ") + "\n")
 			case "/boot":
 				originalBootDevice = splits[0]
-				templateBuffer.WriteString("{{ .BootDevice }}" + strings.Join(splits[1:], " ") + "\n")
+				templateBuffer.WriteString("{{ .BootDevice }} " + strings.Join(splits[1:], " ") + "\n")
 			case "/boot/efi":
 				originalEfiDevice = splits[0]
-				templateBuffer.WriteString("{{ .EfiDevice }}" + strings.Join(splits[1:], " ") + "\n")
+				templateBuffer.WriteString("{{ .EfiDevice }} " + strings.Join(splits[1:], " ") + "\n")
 			default:
 				if strings.Contains(splits[1], "recordings") {
 					originalRecordingsDevice = splits[0]
-					templateBuffer.WriteString("{{ .RecordingsDevice }}" + strings.Join(splits[1:], " ") + "\n")
+					templateBuffer.WriteString("{{ .RecordingsDevice }} " + strings.Join(splits[1:], " ") + "\n")
 				}
 			}
 			continue
@@ -91,7 +91,7 @@ func ProcessFstab(fstab string) (result FstabProcessResult, err error) {
 	if originalEfiDevice == "" {
 		return result, fmt.Errorf("Efi device not found in fstab")
 	}
-	if originalRecordingsDevice == "" {
+	if requireRecordingsDeviceEntry && originalRecordingsDevice == "" {
 		return result, fmt.Errorf("Recordings device not found in fstab")
 	}
 	result.Original = fstab
