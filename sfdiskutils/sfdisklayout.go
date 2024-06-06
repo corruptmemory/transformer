@@ -2,6 +2,8 @@ package sfdiskutils
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -10,13 +12,14 @@ import (
 )
 
 type SFPartitionInfo struct {
-	Partition string
-	Start     int
-	Size      int
-	TypeUUID  string
-	PartUUID  string
-	Name      string
-	Attrs     string
+	Partition    string
+	Start        int
+	Size         int
+	TypeUUID     string
+	PartUUID     string
+	Name         string
+	Attrs        string
+	DeviceByUUID string
 }
 
 func (s *SFPartitionInfo) PartitionNumber() (int, error) {
@@ -69,6 +72,41 @@ type SFDiskLayout struct {
 	LastLBA    int
 	SectorSize int
 	Partitions []SFPartitionInfo
+}
+
+func (s *SFDiskLayout) BuildByUUIDMapping(root string) (err error) {
+	things, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("error: could not read directory[%s]: %s", root, err)
+	}
+	thingsMap := make(map[string]string)
+	for _, thing := range things {
+		if thing.IsDir() {
+			continue
+		}
+		// Ensure we are dealing with a symlink
+		thingPath := root + "/" + thing.Name()
+		thingStat, err := thing.Info()
+		if err != nil {
+			return fmt.Errorf("error: could not stat file[%s]: %s", thingPath, err)
+		}
+		if thingStat.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		l, err := util.ResolveSymlink(thingPath)
+		if err != nil {
+			return fmt.Errorf("error: could not resolve symlink[%s]: %s", thingPath, err)
+		}
+		thingsMap[l] = thing.Name()
+	}
+	for i, part := range s.Partitions {
+		byUUID, ok := thingsMap[part.Partition]
+		if !ok {
+			return fmt.Errorf("error: could not find partition by UUID[%s]", part.Partition)
+		}
+		s.Partitions[i].DeviceByUUID = filepath.Join(root, byUUID)
+	}
+	return nil
 }
 
 func (s *SFDiskLayout) AddPartition(start, size int, typeUUID, partUUID, name, attrs string) (err error) {
