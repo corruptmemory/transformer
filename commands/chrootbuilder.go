@@ -115,7 +115,7 @@ func (r *ChrootProxy) RunCmd(command string, args ...string) (stdout string, std
 	}
 }
 
-func (r *ChrootProxy) Terminate() (err error) {
+func (r *ChrootProxy) terminate() (err error) {
 	rcCmd := Command{
 		Tag: CommandTerminate,
 	}
@@ -283,7 +283,7 @@ type WithChrootResults struct {
 	Err error
 }
 
-func (cb *ChrootBuilder) WithChrootNoMount(targetDir string) (result *ChrootProxy, err error) {
+func (cb *ChrootBuilder) WithChrootNoMount(targetDir string, body func(proxy *ChrootProxy) error) (err error) {
 	wg := &sync.WaitGroup{}
 	chrootResultsChannel := make(chan WithChrootResults, 100)
 	chrootRunner := func() {
@@ -375,7 +375,7 @@ resultChannelLoop:
 		e, f, _, err := util.WhatsThere("./remote-control.sock")
 		if err != nil {
 			cb.c.Errorf("Error checking for remote-control.sock: %v", err)
-			return nil, err
+			return err
 		}
 		if e && f {
 			cb.c.Infof("Found remote-control.sock")
@@ -383,9 +383,9 @@ resultChannelLoop:
 			cb.c.Infof("Connected remote-control.sock")
 			if err != nil {
 				cb.c.Errorf("Error connecting to remote-control.sock: %v", err)
-				return nil, err
+				return err
 			}
-			result = &ChrootProxy{
+			proxy := &ChrootProxy{
 				c:                    cb.c,
 				conn:                 conn,
 				wg:                   wg,
@@ -393,14 +393,19 @@ resultChannelLoop:
 				enc:                  gob.NewEncoder(conn),
 				dec:                  gob.NewDecoder(conn),
 			}
-			return result, nil
+			defer func() {
+				terminateErr := proxy.terminate()
+				cb.c.Errorf("Error terminating chroot proxy: %v", terminateErr)
+				os.Remove("./remote-control.sock")
+			}()
+			return body(proxy)
 		}
 		time.Sleep(1 * time.Second)
 	}
 
 }
 
-func (cb *ChrootBuilder) WithChroot(device, targetDir string) (result *ChrootProxy, err error) {
+func (cb *ChrootBuilder) WithChroot(device, targetDir string, body func(proxy *ChrootProxy) error) (err error) {
 	wg := &sync.WaitGroup{}
 	chrootResultsChannel := make(chan WithChrootResults, 100)
 	chrootRunner := func() {
@@ -494,7 +499,7 @@ resultChannelLoop:
 		e, f, _, err := util.WhatsThere("./remote-control.sock")
 		if err != nil {
 			cb.c.Errorf("Error checking for remote-control.sock: %v", err)
-			return nil, err
+			return err
 		}
 		if e && f {
 			cb.c.Infof("Found remote-control.sock")
@@ -502,9 +507,9 @@ resultChannelLoop:
 			cb.c.Infof("Connected remote-control.sock")
 			if err != nil {
 				cb.c.Errorf("Error connecting to remote-control.sock: %v", err)
-				return nil, err
+				return err
 			}
-			result = &ChrootProxy{
+			proxy := &ChrootProxy{
 				c:                    cb.c,
 				conn:                 conn,
 				wg:                   wg,
@@ -512,7 +517,12 @@ resultChannelLoop:
 				enc:                  gob.NewEncoder(conn),
 				dec:                  gob.NewDecoder(conn),
 			}
-			return result, nil
+			defer func() {
+				terinateErr := proxy.terminate()
+				cb.c.Errorf("Error terminating chroot proxy: %v", terinateErr)
+				os.Remove("./remote-control.sock")
+			}()
+			return body(proxy)
 		}
 		time.Sleep(1 * time.Second)
 	}

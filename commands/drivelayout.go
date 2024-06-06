@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"transformer/blkidutils"
+	"transformer/dfutils"
+	"transformer/efigrubutils"
 
 	"transformer/util"
 )
@@ -76,12 +78,21 @@ type PartitionInfo struct {
 	HasGrubConfig              bool
 	GrubCfgPath                string
 	GrubCfgContents            string
+	EFIGrubFound               bool
+	EFIGrubPath                string
+	EFIGrubContents            string
+	EFIGrubTemplate            *efigrubutils.EFIGrubConfig
 	HasEPICApplication         bool
 	EPICApplicationPath        string
 	HasFstab                   bool
 	FstabContents              string
 	HasOSRelease               bool
 	OSRelease                  OSRelease
+	DiskUsage                  dfutils.DiskUsage
+}
+
+func (p *PartitionInfo) updateWithDiskUsage(in dfutils.DiskUsage) {
+	p.DiskUsage = in
 }
 
 func (p *PartitionInfo) updateWithBlkidInfo(in blkidutils.BlkIdPartitionInfo) {
@@ -100,10 +111,15 @@ func (p *PartitionInfo) updateWithPartitionDetails(in PartitionContentDetails) {
 	p.GrubCfgContents = in.GrubCfgContents
 	p.HasOSRelease = in.OSReleaseFound
 	p.OSRelease = in.OSRelease
+	p.EFIGrubFound = in.EFIGrubFound
+	p.EFIGrubPath = in.EFIGrubPath
+	p.EFIGrubContents = in.EFIGrubContents
+	p.EFIGrubTemplate = in.EFIGrubTemplate
 	p.HasEPICApplication = in.EPICApplicationFound
 	p.EPICApplicationPath = in.EPICApplicationPath
 	p.HasFstab = in.FstabFound
 	p.FstabContents = in.FstabContents
+	p.DiskUsage = in.DiskUsage
 }
 
 type DriveLayout struct {
