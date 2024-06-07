@@ -106,7 +106,7 @@ func (p *PartitionInfo) updateWithPartedInfo(in partedInfo) {
 }
 
 func (p *PartitionInfo) updateWithPartitionDetails(in PartitionContentDetails) {
-	p.HasGrubConfig = true
+	p.HasGrubConfig = in.GrubCfgFound
 	p.GrubCfgPath = in.GrubCfgPath
 	p.GrubCfgContents = in.GrubCfgContents
 	p.HasOSRelease = in.OSReleaseFound
