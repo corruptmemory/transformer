@@ -49,18 +49,28 @@ func upgrader() {
 		c.Errorf("Error finding partition info: %v", err)
 		return
 	}
-	c.Infof("Ensure that we are looking at a disk with Ubuntu 20.04 on it")
 	var validOS bool
 	var osDevice string
+	var alreadyUpgraded bool
+	var upgradePartition commands.PartitionInfo
 	for _, p := range pis {
 		if p.HasOSRelease {
-			if p.OSRelease.VersionID == "20.04" {
+			switch p.OSRelease.VersionID {
+			case "20.04":
 				validOS = true
 				osDevice = p.PartitionDevice
-				break
+			case "24.04":
+				alreadyUpgraded = true
+				upgradePartition = p
 			}
 		}
 	}
+	if alreadyUpgraded {
+		c.Infof("Ubuntu 24.04 has already been installed on this disk array")
+		c.Infof("Partition with Ubuntu 24.04: %s", upgradePartition.PartitionDevice)
+		return
+	}
+	c.Infof("Ensure that we are looking at a disk with Ubuntu 20.04 on it")
 	if !validOS {
 		c.Errorf("No Ubuntu 20.04 OS found")
 		return
