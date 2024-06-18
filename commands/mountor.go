@@ -106,6 +106,33 @@ func (c *Commands) WithTempMountErr(device, mountPoint string, body func(c *Comm
 	})
 }
 
+func (c *Commands) WithChrootMountConfig(mountRoot, rootDevice, grubDevice, efiDevice string, body func(c *Commands, mount MountDetails) error) (err error) {
+	return c.WithGroupInScopeErr("WithChrootMountConfig", func(c *Commands) error {
+		err := c.WithTempMountErr(rootDevice, mountRoot, func(c *Commands, rootMount MountDetails) error {
+			c.Infof("  > Mounted %s at %s", rootDevice, rootMount.MountPath)
+			err := c.WithTempMountErr(grubDevice, mountRoot+"/boot", func(c *Commands, grubMount MountDetails) error {
+				c.Infof("  > Mounted %s at %s", grubDevice, grubMount.MountPath)
+				err := c.WithTempMountErr(efiDevice, mountRoot+"/boot/efi", func(c *Commands, efiMount MountDetails) error {
+					c.Infof("  > Mounted %s at %s", efiMount, efiMount.MountPath)
+					return body(c, rootMount)
+				})
+				if err != nil {
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 func (c *Commands) Mount(src, target string, options ...string) (err error) {
 	return c.WithGroupInScopeErr("Mount", func(c *Commands) error {
 		mountCmd := c.Cmd("mount", append([]string{src, target}, options...)...)

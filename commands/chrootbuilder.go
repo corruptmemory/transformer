@@ -115,6 +115,36 @@ func (r *ChrootProxy) RunCmd(command string, args ...string) (stdout string, std
 	}
 }
 
+func (r *ChrootProxy) RunCanaryBoot(uuid string) (stdout string, stderr string, err error) {
+	rcCmd := Command{
+		Tag:  CommandSetupCanaryBoot,
+		UUID: uuid,
+	}
+	err = r.enc.Encode(rcCmd)
+	if err != nil {
+		return "", "", err
+	}
+	r.c.Infof("Canary boot command sent to chroot: UUID: %s", uuid)
+	for {
+		var reply Reply
+		err = r.dec.Decode(&reply)
+		if err != nil {
+			return "", "", err
+		}
+		switch reply.Tag {
+		case ReplyError:
+			return reply.StdOut, reply.StdErr, fmt.Errorf("error from chroot command: %s", reply.Err)
+		case ReplyCommandStarted:
+			r.c.Infof("Command started in chroot")
+			// Do nothing at the moment
+		case ReplyCommandCompleted:
+			return reply.StdOut, reply.StdErr, nil
+		default:
+			return "", "", fmt.Errorf("unexpected reply tag: %v", reply.Tag)
+		}
+	}
+}
+
 func (r *ChrootProxy) terminate() (err error) {
 	rcCmd := Command{
 		Tag: CommandTerminate,
