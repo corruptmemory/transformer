@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"transformer/blkidutils"
 	"transformer/commands"
@@ -671,29 +672,21 @@ func upgrader() {
 	}
 
 	c.Infof("Updating GRUB configuration on the original OS/EPIC partition")
-	err = c.WithTempMountErr(originalOSPartition.Partition, "/mnt", func(c *commands.Commands, mount commands.MountDetails) error {
-		c.Infof("Original OS/EPIC device mounted at %s", mount.MountPath)
-		originalMountPath := mount.MountPath
-		return c.WithTempMountErr(grubDevice, "/mnt/boot", func(c *commands.Commands, mount commands.MountDetails) error {
-			c.Infof("Original GRUB device mounted at %s", mount.MountPath)
-			return c.WithTempMountErr(efiBootDevice, "/mnt/boot/efi", func(c *commands.Commands, mount commands.MountDetails) error {
-				c.Infof("Original EFI device mounted at %s", mount.MountPath)
-				c.Infof("Entering Chroot...")
-				chr := c.ChrootBuilder()
-				return chr.WithChrootNoMount(originalMountPath, func(proxy *commands.ChrootProxy) error {
-					c.Infof("Running update-grub")
-					so, se, err := proxy.RunCmd("update-grub")
-					if err != nil {
-						c.Errorf("Error running update-grub: %v", err)
-						c.Errorf("STDOUT: %s", so)
-						c.Errorf("STDERR: %s", se)
-						return err
-					}
-					c.Infof("STDOUT: %s", so)
-					c.Infof("STDERR: %s", se)
-					return nil
-				})
-			})
+	err = c.WithChrootMountConfig("/mnt", originalOSPartition.Partition, grubDevice, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Running update-grub")
+			so, se, err := proxy.RunCmd("update-grub")
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
 		})
 	})
 	if err != nil {
@@ -702,29 +695,21 @@ func upgrader() {
 	}
 
 	c.Infof("Updating GRUB configuration on the new OS/EPIC partition")
-	err = c.WithTempMountErr(newOSPartition.Partition, "/mnt", func(c *commands.Commands, mount commands.MountDetails) error {
-		c.Infof("New OS/EPIC device mounted at %s", mount.MountPath)
-		originalMountPath := mount.MountPath
-		return c.WithTempMountErr(newGRUBPartition.Partition, "/mnt/boot", func(c *commands.Commands, mount commands.MountDetails) error {
-			c.Infof("New GRUB device mounted at %s", mount.MountPath)
-			return c.WithTempMountErr(efiBootDevice, "/mnt/boot/efi", func(c *commands.Commands, mount commands.MountDetails) error {
-				c.Infof("Original EFI device mounted at %s", mount.MountPath)
-				c.Infof("Entering Chroot...")
-				chr := c.ChrootBuilder()
-				return chr.WithChrootNoMount(originalMountPath, func(proxy *commands.ChrootProxy) error {
-					c.Infof("Running update-grub")
-					so, se, err := proxy.RunCmd("update-grub")
-					if err != nil {
-						c.Errorf("Error running update-grub: %v", err)
-						c.Errorf("STDOUT: %s", so)
-						c.Errorf("STDERR: %s", se)
-						return err
-					}
-					c.Infof("STDOUT: %s", so)
-					c.Infof("STDERR: %s", se)
-					return nil
-				})
-			})
+	err = c.WithChrootMountConfig("/mnt", newOSPartition.Partition, newGRUBPartition.Partition, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Running update-grub")
+			so, se, err := proxy.RunCmd("update-grub")
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
 		})
 	})
 	if err != nil {
@@ -732,6 +717,54 @@ func upgrader() {
 		return
 	}
 
+	c.Infof("Setting the canary boot to the new OS/EPIC partition")
+	err = c.WithChrootMountConfig("/mnt", originalOSPartition.Partition, grubDevice, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Getting the `blkid` layout")
+			nBIDL, err := c.BLKIDLayout(da.DevicePath)
+			if err != nil {
+				c.Errorf("Error: could not get the `blkid` layout for %s: %v", da.DevicePath, err)
+				return fmt.Errorf("error: could not get the `blkid` layout for %s: %v", da.DevicePath, err)
+			}
+			// Find the new OS partition in the `blkid` layout
+			var nOSP blkidutils.BlkIdPartitionInfo
+			for _, p := range nBIDL.Partitions {
+				if p.Partition == newOSPartition.Partition {
+					nOSP = p
+				}
+			}
+			if nOSP.Partition == "" {
+				c.Errorf("Error: could not find the new OS partition in the `blkid` layout given %s", nOSP.Partition)
+				return fmt.Errorf("error: could not find the new OS partition in the `blkid` layout given %s", nOSP.Partition)
+			}
+			nOSP.UUID = strings.ToLower(nOSP.UUID)
+			so, se, err := proxy.RunCanaryBoot(nOSP.UUID)
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
+		})
+	})
+	if err != nil {
+		c.Errorf("Error running grup update for the original EPIC system: %v", err)
+		return
+	}
+	fmt.Print("Press enter to reboot the system: ")
+	_, _ = fmt.Scanln()
+	c.Infof("Rebooting the system")
+	rbCmd := c.Cmd("reboot")
+	err = c.RunCmd(rbCmd)
+	if err != nil {
+		c.Errorf("Error: could not reboot the system: %v", err)
+	}
+	return
 }
 
 func remoteControl(args RemoteControl) {
