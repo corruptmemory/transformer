@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"transformer/loghelper"
 
 	"transformer/cmdr"
 
@@ -208,6 +209,10 @@ func (c *Commands) WithGroupInScope(name string, body func(c1 *Commands)) {
 		tempRoot:  c.tempRoot,
 	}
 	body(c1)
+}
+
+func (c *Commands) LogHelper() *loghelper.LogHelper {
+	return loghelper.NewLogHelper(c.log)
 }
 
 func (c *Commands) Debug(msg string, args ...any) {

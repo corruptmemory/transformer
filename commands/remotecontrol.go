@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"transformer/cmdr"
+	"transformer/grubutils"
 )
 
 type CommandTag int
@@ -16,12 +18,14 @@ type CommandTag int
 const (
 	CommandTerminate CommandTag = iota
 	CommandCli
+	CommandSetupCanaryBoot
 )
 
 type Command struct {
 	Tag     CommandTag
 	Command string
 	Args    []string
+	UUID    string
 	StdIn   string
 }
 
@@ -110,6 +114,81 @@ func (c *Commands) handleCliCommand(cmd Command, enc *gob.Encoder) {
 	}
 }
 
+func (c *Commands) handleSetupCanaryBootCommand(uuid string, enc *gob.Encoder) {
+	var err error
+	reportError := func(err error) {
+		err1 := enc.Encode(Reply{
+			Tag: ReplyError,
+			Err: err.Error(),
+		})
+		if err1 != nil {
+			c.Errorf("Error encoding reply: %+v", err1)
+		}
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			c.Errorf("Recovered from panic: %+v", r)
+			reportError(fmt.Errorf("recovered from panic: %+v", r))
+			return
+		}
+		if err != nil {
+			reportError(err)
+			return
+		}
+		err1 := enc.Encode(Reply{
+			Tag: ReplyCommandCompleted,
+		})
+		if err1 != nil {
+			c.Errorf("Error encoding reply: %+v", err1)
+		}
+	}()
+	err = enc.Encode(Reply{
+		Tag: ReplyCommandStarted,
+	})
+	if err != nil {
+		c.Errorf("Error encoding reply: %+v", err)
+		return
+	}
+	grubcfgf, err := os.Open("/boot/grub/grub.cfg")
+	if err != nil {
+		c.Errorf("Error: could not read the GRUB configuration: %v", err)
+		return
+	}
+	defer grubcfgf.Close()
+	grubcfg, err := io.ReadAll(grubcfgf)
+	if err != nil {
+		c.Errorf("Error: could not read the GRUB configuration: %v", err)
+		return
+	}
+	c.Infof("Parsing GRUB configuration")
+	menus, _, err := grubutils.GrubParser(string(grubcfg))
+	if err != nil {
+		c.Errorf("Error: could not parse the GRUB configuration: %v", err)
+		c.Errorf("Given:\n %s", string(grubcfg))
+		return
+	}
+	// Find the menu entry with the UUID of the new OS partition
+	var newOSMenuEntry grubutils.MenuEntry
+	for _, m := range menus {
+		if strings.Contains(strings.ToLower(m.Id), uuid) {
+			newOSMenuEntry = m
+		}
+	}
+	if newOSMenuEntry.Id == "" {
+		c.Errorf("Error: could not find the new OS partition in the GRUB configuration. Looking for %s", uuid)
+		err = fmt.Errorf("error: could not find the new OS partition in the GRUB configuration. Looking for %s", uuid)
+		return
+	}
+	c.Infof("Found the menu entry for the new OS partition: %s", newOSMenuEntry.Id)
+	grCmd := c.Cmd("grub-reboot", newOSMenuEntry.Id)
+	err = c.RunCmd(grCmd)
+	if err != nil {
+		c.Errorf("Error running grub-reboot: %v", err)
+		err = fmt.Errorf("error running grub-reboot: %v", err)
+		return
+	}
+}
+
 func (c *Commands) handleConnection(conn net.Conn, listener net.Listener, wg *sync.WaitGroup) {
 	defer func() {
 		conn.Close()
@@ -146,6 +225,8 @@ func (c *Commands) handleConnection(conn net.Conn, listener net.Listener, wg *sy
 			return
 		case CommandCli:
 			c.handleCliCommand(cmd, enc)
+		case CommandSetupCanaryBoot:
+			c.handleSetupCanaryBootCommand(cmd.UUID, enc)
 		}
 
 	}

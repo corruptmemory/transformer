@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 	"transformer/blkidutils"
 	"transformer/commands"
@@ -49,34 +50,48 @@ func upgrader() {
 		c.Errorf("Error finding partition info: %v", err)
 		return
 	}
-	c.Infof("Ensure that we are looking at a disk with Ubuntu 20.04 on it")
 	var validOS bool
 	var osDevice string
+	var alreadyUpgraded bool
+	var upgradePartition commands.PartitionInfo
 	for _, p := range pis {
 		if p.HasOSRelease {
-			if p.OSRelease.VersionID == "20.04" {
+			switch p.OSRelease.VersionID {
+			case "20.04":
 				validOS = true
 				osDevice = p.PartitionDevice
-				break
+			case "24.04":
+				alreadyUpgraded = true
+				upgradePartition = p
 			}
 		}
 	}
+	if alreadyUpgraded {
+		c.Infof("Ubuntu 24.04 has already been installed on this disk array")
+		c.Infof("Partition with Ubuntu 24.04: %s", upgradePartition.PartitionDevice)
+		return
+	}
+	c.Infof("Ensure that we are looking at a disk with Ubuntu 20.04 on it")
 	if !validOS {
 		c.Errorf("No Ubuntu 20.04 OS found")
 		return
 	}
 	c.Infof("Ensure that we have a disk with the EPIC applicaton on it")
 	var grubDevice string
+	var grubPartition commands.PartitionInfo
 	var epicDevice string
+	var epicPartition commands.PartitionInfo
 	var efiBootDevice string
 	var efiBootPartition commands.PartitionInfo
 	for _, p := range pis {
 		if p.HasEPICApplication {
 			epicDevice = p.PartitionDevice
+			epicPartition = p
 			break
 		}
 		if p.HasGrubConfig {
 			grubDevice = p.PartitionDevice
+			grubPartition = p
 		}
 		if p.Boot {
 			efiBootDevice = p.PartitionDevice
@@ -98,6 +113,17 @@ func upgrader() {
 	if efiBootPartition.EFIGrubTemplate == nil {
 		c.Errorf("Could not find the GRUB configuration template")
 		c.Infof("Details: %+v", efiBootPartition)
+		return
+	}
+	c.Infof("Ensuring that the OS and GRUB partitions have enough room to split")
+	c.Infof("  > Used space on OS partition: %.2f%%", epicPartition.DiskUsage.PercentageUsed())
+	c.Infof("  > Used space on GRUB partition: %.2f%%", grubPartition.DiskUsage.PercentageUsed())
+	if epicPartition.DiskUsage.PercentageUsed() >= 50 {
+		c.Errorf("Insufficient space on the OS partition to split")
+		return
+	}
+	if grubPartition.DiskUsage.PercentageUsed() >= 50 {
+		c.Errorf("Insufficient space on the GRUB partition to split")
 		return
 	}
 	c.Infof("Ensure the OS device and the EPIC device are the same")
@@ -275,13 +301,6 @@ func upgrader() {
 		c.Errorf("Input: %s", sfdisk.String())
 		return
 	}
-	c.Infof("--- New layout ---\n%s\n---------------", sfdisk.String())
-	c.Infof("Writing new partition layout")
-	err = c.SFDiskApply(da.DevicePath, sfdisk)
-	if err != nil {
-		c.Errorf("Error applying new disk layout: %v", err)
-		return
-	}
 	c.Infof("Splitting the GRUB partition[%d]: %s", grubpn, osDevice)
 	newGRUBUUIDString := uuid.New().String()
 	err = sfdisk.SplitPartitionEqually(grubpn, newGRUBUUIDString, "", "")
@@ -299,7 +318,7 @@ func upgrader() {
 	}
 	c.Infof("Syncing partiton info...")
 	partProbeCmd := c.Cmd("partprobe", da.DevicePath)
-	err = partProbeCmd.Run()
+	err = c.RunCmd(partProbeCmd)
 	if err != nil {
 		c.Errorf("Error running partprobe: %v", err)
 		c.Errorf("STDERR: %s", partProbeCmd.GetStderrAsString())
@@ -557,7 +576,7 @@ func upgrader() {
 		}
 		c.Infof("Updating new fstab with deatils form the original fstab")
 		newInputs := fstabutils.FstabTemplateInput{
-			RootDevice:       originalFSTabTemplate.OriginalRootDevice,
+			RootDevice:       newOSPartition.DeviceByUUID,
 			BootDevice:       newGRUBPartition.DeviceByUUID,
 			EfiDevice:        originalFSTabTemplate.OriginalEfiDevice,
 			RecordingsDevice: originalFSTabTemplate.OriginalRecordingsDevice,
@@ -652,36 +671,100 @@ func upgrader() {
 		return
 	}
 
-	c.Infof("Updating GRUB configuration")
-	err = c.WithTempMountErr(originalOSPartition.Partition, "/mnt", func(c *commands.Commands, mount commands.MountDetails) error {
-		c.Infof("Original OS/EPIC device mounted at %s", mount.MountPath)
-		originalMountPath := mount.MountPath
-		return c.WithTempMountErr(grubDevice, "/mnt/boot", func(c *commands.Commands, mount commands.MountDetails) error {
-			c.Infof("Original GRUB device mounted at %s", mount.MountPath)
-			return c.WithTempMountErr(efiBootDevice, "/mnt/boot/efi", func(c *commands.Commands, mount commands.MountDetails) error {
-				c.Infof("Original EFI device mounted at %s", mount.MountPath)
-				c.Infof("Entering Chroot...")
-				chr := c.ChrootBuilder()
-				return chr.WithChrootNoMount(originalMountPath, func(proxy *commands.ChrootProxy) error {
-					c.Infof("Running update-grub")
-					so, se, err := proxy.RunCmd("update-grub")
-					if err != nil {
-						c.Errorf("Error running update-grub: %v", err)
-						c.Errorf("STDOUT: %s", so)
-						c.Errorf("STDERR: %s", se)
-						return err
-					}
-					c.Infof("STDOUT: %s", so)
-					c.Infof("STDERR: %s", se)
-					return nil
-				})
-			})
+	c.Infof("Updating GRUB configuration on the original OS/EPIC partition")
+	err = c.WithChrootMountConfig("/mnt", originalOSPartition.Partition, grubDevice, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Running update-grub")
+			so, se, err := proxy.RunCmd("update-grub")
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
 		})
 	})
 	if err != nil {
-		c.Errorf("Error running grup update: %v", err)
+		c.Errorf("Error running grup update for the original EPIC system: %v", err)
 		return
 	}
+
+	c.Infof("Updating GRUB configuration on the new OS/EPIC partition")
+	err = c.WithChrootMountConfig("/mnt", newOSPartition.Partition, newGRUBPartition.Partition, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Running update-grub")
+			so, se, err := proxy.RunCmd("update-grub")
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
+		})
+	})
+	if err != nil {
+		c.Errorf("Error running grup update for the NEW EPIC system: %v", err)
+		return
+	}
+
+	c.Infof("Setting the canary boot to the new OS/EPIC partition")
+	err = c.WithChrootMountConfig("/mnt", originalOSPartition.Partition, grubDevice, efiBootDevice, func(c *commands.Commands, mount commands.MountDetails) error {
+		c.Infof("Entering Chroot...")
+		chr := c.ChrootBuilder()
+		return chr.WithChrootNoMount(mount.MountPath, func(proxy *commands.ChrootProxy) error {
+			c.Infof("Getting the `blkid` layout")
+			nBIDL, err := c.BLKIDLayout(da.DevicePath)
+			if err != nil {
+				c.Errorf("Error: could not get the `blkid` layout for %s: %v", da.DevicePath, err)
+				return fmt.Errorf("error: could not get the `blkid` layout for %s: %v", da.DevicePath, err)
+			}
+			// Find the new OS partition in the `blkid` layout
+			var nOSP blkidutils.BlkIdPartitionInfo
+			for _, p := range nBIDL.Partitions {
+				if p.Partition == newOSPartition.Partition {
+					nOSP = p
+				}
+			}
+			if nOSP.Partition == "" {
+				c.Errorf("Error: could not find the new OS partition in the `blkid` layout given %s", nOSP.Partition)
+				return fmt.Errorf("error: could not find the new OS partition in the `blkid` layout given %s", nOSP.Partition)
+			}
+			nOSP.UUID = strings.ToLower(nOSP.UUID)
+			so, se, err := proxy.RunCanaryBoot(nOSP.UUID)
+			if err != nil {
+				c.Errorf("Error running update-grub: %v", err)
+				c.Errorf("STDOUT: %s", so)
+				c.Errorf("STDERR: %s", se)
+				return err
+			}
+			c.Infof("STDOUT: %s", so)
+			c.Infof("STDERR: %s", se)
+			return nil
+		})
+	})
+	if err != nil {
+		c.Errorf("Error running grup update for the original EPIC system: %v", err)
+		return
+	}
+	fmt.Print("Press enter to reboot the system: ")
+	_, _ = fmt.Scanln()
+	c.Infof("Rebooting the system")
+	rbCmd := c.Cmd("reboot")
+	err = c.RunCmd(rbCmd)
+	if err != nil {
+		c.Errorf("Error: could not reboot the system: %v", err)
+	}
+	return
 }
 
 func remoteControl(args RemoteControl) {
